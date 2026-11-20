@@ -198,7 +198,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   Future<void> onLoad() async {
     await super.onLoad();
 
-    world.add(SpaceMapComponent());
+    await world.add(SpaceMapComponent());
 
     player = PlayerShipComponent(position: Vector2.zero());
     _initStarterState();
@@ -206,7 +206,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     player
       ..hp = currentMaxHull
       ..shield = currentMaxShield;
-    world.add(player);
+    await world.add(player);
 
     for (final AlienTier tier in AlienTier.values) {
       final AlienTierSpec spec = AlienTierCatalog.of(tier);
@@ -220,7 +220,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
 
     camera.viewfinder.anchor = Anchor.center;
-    camera.viewfinder.position = player.position.clone();
+    camera.follow(player, snap: true);
 
     moveJoystick = JoystickComponent(
       knob: CircleComponent(
@@ -274,7 +274,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     minimap = MinimapComponent();
     tacticalHud = TacticalHudComponent();
 
-    camera.viewport.addAll(<Component>[
+    await camera.viewport.addAll(<Component>[
       moveJoystick,
       aimJoystick,
       attackButton,
@@ -592,9 +592,6 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   void update(double dt) {
     super.update(dt);
     elapsedTime += dt;
-
-    final double smooth = 1.0 - exp(-8.5 * dt);
-    camera.viewfinder.position.lerp(player.position, smooth);
 
     if (aimJoystick.relativeDelta.length > 0.12) {
       final double aimAngle = atan2(
