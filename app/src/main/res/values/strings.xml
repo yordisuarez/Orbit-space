@@ -87,4 +87,6 @@
     <string name="cd_cycle_formation">Cycle owned drone formation</string>
     <string name="cd_open_tactical_map">Expand tactical sector map</string>
     <string name="cd_cancel_autopilot">Cancel autopilot</string>
+    <string name="action_debug_add_credits">+1M CR</string>
+    <string name="action_debug_add_level">+1 LVL</string>
 </resources>

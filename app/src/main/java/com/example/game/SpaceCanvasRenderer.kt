@@ -941,9 +941,9 @@ private fun DrawScope.drawOrbitingVants(engine: SpaceGameEngine) {
     val formAccent = Color(formation.accentHex)
     val pulse = 0.75f + 0.25f * sin(engine.elapsedTime * 6.5f)
 
-    // Subtle formation aura ring for RING / WHEEL / DIAMOND
-    if (formation == DroneFormation.RING || formation == DroneFormation.WHEEL) {
-        val ringR = if (formation == DroneFormation.RING) player.shipClass.hullRadius + 20f else player.shipClass.hullRadius + 30f
+    // Subtle formation aura ring for RING formation only (WHEEL draws drones only, no extra rings)
+    if (formation == DroneFormation.RING) {
+        val ringR = player.shipClass.hullRadius + 20f
         drawCircle(
             color = formAccent.copy(alpha = 0.16f),
             radius = ringR,

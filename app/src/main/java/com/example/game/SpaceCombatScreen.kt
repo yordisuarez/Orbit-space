@@ -210,6 +210,9 @@ fun SpaceCombatScreen(
                 onUnequipShieldSlot = { viewModel.unequipShieldSlot(it) },
                 onUnequipSectorChip = { viewModel.unequipSectorChip() },
                 onClaimMissionReward = { viewModel.claimMissionReward() },
+                onResetSave = { viewModel.resetSave() },
+                onDebugAddCredits = { viewModel.debugAddOneMillionCredits() },
+                onDebugAddLevel = { viewModel.debugAddOneLevel() },
                 onClose = { viewModel.closeHangar() }
             )
         }

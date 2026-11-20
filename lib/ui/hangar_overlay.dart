@@ -113,6 +113,16 @@ class _HangarOverlayState extends State<HangarOverlay> {
     }
   }
 
+  void _debugAddCredits() {
+    widget.game.debugAddOneMillionCredits();
+    setState(() {});
+  }
+
+  void _debugAddLevel() {
+    widget.game.debugAddOneLevel();
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final DarkOrbitGame game = widget.game;
@@ -261,28 +271,6 @@ class _HangarOverlayState extends State<HangarOverlay> {
                           ),
                         ),
                         const SizedBox(width: 6.0),
-                        OutlinedButton(
-                          onPressed: _resetSave,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFFF6B81),
-                            side: const BorderSide(color: Color(0x88FF2E4C)),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9.0,
-                              vertical: 6.0,
-                            ),
-                            minimumSize: const Size(0.0, 36.0),
-                          ),
-                          child: const Text(
-                            'RESET SAVE',
-                            maxLines: 1,
-                            softWrap: false,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6.0),
                         ElevatedButton.icon(
                           onPressed: game.closeHangar,
                           icon: const Icon(Icons.play_arrow, size: 15.0),
@@ -307,7 +295,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                 ),
                 const SizedBox(height: 8.0),
 
-                // 2. Compact live ship stats summary bar + Always-Accessible Config 1 / 2 Toggle
+                // 2. Compact live ship stats summary bar + Config 1 / 2 + Dev & Reset buttons
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8.0,
@@ -318,81 +306,158 @@ class _HangarOverlayState extends State<HangarOverlay> {
                     borderRadius: BorderRadius.circular(10.0),
                     border: Border.all(color: const Color(0xFF1E3A5F)),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: <Widget>[
-                      Container(
-                        padding: const EdgeInsets.all(2.0),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF040914),
-                          borderRadius: BorderRadius.circular(7.0),
-                          border: Border.all(color: const Color(0xFF1E3A5F)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            _TabPill(
-                              label: 'CFG 1',
-                              selected: game.activeConfig == 1,
-                              onTap: () => _switchConfig(1),
-                            ),
-                            const SizedBox(width: 2.0),
-                            _TabPill(
-                              label: 'CFG 2',
-                              selected: game.activeConfig == 2,
-                              onTap: () => _switchConfig(2),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7.0,
-                          vertical: 4.0,
-                        ),
-                        decoration: BoxDecoration(
-                          color: activeShip.accentColor.withOpacity(0.14),
-                          borderRadius: BorderRadius.circular(6.0),
-                          border: Border.all(
-                            color: activeShip.accentColor.withOpacity(0.6),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: <Widget>[
+                        Container(
+                          padding: const EdgeInsets.all(2.0),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF040914),
+                            borderRadius: BorderRadius.circular(7.0),
+                            border: Border.all(color: const Color(0xFF1E3A5F)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              _TabPill(
+                                label: 'CFG 1',
+                                selected: game.activeConfig == 1,
+                                onTap: () => _switchConfig(1),
+                              ),
+                              const SizedBox(width: 2.0),
+                              _TabPill(
+                                label: 'CFG 2',
+                                selected: game.activeConfig == 2,
+                                onTap: () => _switchConfig(2),
+                              ),
+                            ],
                           ),
                         ),
-                        child: Text(
-                          activeShip.displayName.toUpperCase(),
-                          maxLines: 1,
-                          softWrap: false,
-                          style: TextStyle(
-                            color: activeShip.accentColor,
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.bold,
+                        const SizedBox(width: 8.0),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7.0,
+                            vertical: 4.0,
+                          ),
+                          decoration: BoxDecoration(
+                            color: activeShip.accentColor.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(6.0),
+                            border: Border.all(
+                              color: activeShip.accentColor.withOpacity(0.6),
+                            ),
+                          ),
+                          child: Text(
+                            activeShip.displayName.toUpperCase(),
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              color: activeShip.accentColor,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                      ),
-                      _LiveStatItem(
-                        icon: Icons.bolt,
-                        label: 'DMG',
-                        value: '${game.currentLaserDamage.toInt()}',
-                        color: const Color(0xFFFF2E4C),
-                      ),
-                      _LiveStatItem(
-                        icon: Icons.shield,
-                        label: 'SHD',
-                        value: '${game.currentMaxShield.toInt()}',
-                        color: const Color(0xFF38BDF8),
-                      ),
-                      _LiveStatItem(
-                        icon: Icons.speed,
-                        label: 'SPD',
-                        value: '${game.currentSpeed.toInt()}',
-                        color: const Color(0xFFFBBF24),
-                      ),
-                      _LiveStatItem(
-                        icon: Icons.favorite,
-                        label: 'HULL',
-                        value: '${game.currentMaxHull.toInt()}',
-                        color: const Color(0xFF22C55E),
-                      ),
-                    ],
+                        const SizedBox(width: 10.0),
+                        _LiveStatItem(
+                          icon: Icons.bolt,
+                          label: 'DMG',
+                          value: '${game.currentLaserDamage.toInt()}',
+                          color: const Color(0xFFFF2E4C),
+                        ),
+                        const SizedBox(width: 10.0),
+                        _LiveStatItem(
+                          icon: Icons.shield,
+                          label: 'SHD',
+                          value: '${game.currentMaxShield.toInt()}',
+                          color: const Color(0xFF38BDF8),
+                        ),
+                        const SizedBox(width: 10.0),
+                        _LiveStatItem(
+                          icon: Icons.speed,
+                          label: 'SPD',
+                          value: '${game.currentSpeed.toInt()}',
+                          color: const Color(0xFFFBBF24),
+                        ),
+                        const SizedBox(width: 10.0),
+                        _LiveStatItem(
+                          icon: Icons.favorite,
+                          label: 'HULL',
+                          value: '${game.currentMaxHull.toInt()}',
+                          color: const Color(0xFF22C55E),
+                        ),
+                        const SizedBox(width: 12.0),
+                        // Temporary Developer / Testing Buttons next to RESET SAVE
+                        OutlinedButton(
+                          onPressed: _debugAddCredits,
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: const Color(0x33F59E0B),
+                            foregroundColor: const Color(0xFFFBBF24),
+                            side: const BorderSide(color: Color(0xCCFBBF24)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0,
+                              vertical: 4.0,
+                            ),
+                            minimumSize: const Size(0.0, 28.0),
+                          ),
+                          child: const Text(
+                            '+1M CR',
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              fontSize: 10.0,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 5.0),
+                        OutlinedButton(
+                          onPressed: _debugAddLevel,
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: const Color(0x33A855F7),
+                            foregroundColor: const Color(0xFFE9D5FF),
+                            side: const BorderSide(color: Color(0xCCC084FC)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0,
+                              vertical: 4.0,
+                            ),
+                            minimumSize: const Size(0.0, 28.0),
+                          ),
+                          child: const Text(
+                            '+1 LVL',
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              fontSize: 10.0,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 5.0),
+                        OutlinedButton(
+                          onPressed: _resetSave,
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: const Color(0x28FF2E4C),
+                            foregroundColor: const Color(0xFFFF6B81),
+                            side: const BorderSide(color: Color(0xAAFF2E4C)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0,
+                              vertical: 4.0,
+                            ),
+                            minimumSize: const Size(0.0, 28.0),
+                          ),
+                          child: const Text(
+                            'RESET SAVE',
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              fontSize: 10.0,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8.0),
@@ -984,7 +1049,6 @@ class _HangarOverlayState extends State<HangarOverlay> {
     const List<EquipmentItemId> baseItems = <EquipmentItemId>[
       EquipmentItemId.lf1,
       EquipmentItemId.sg1,
-      EquipmentItemId.chip1,
     ];
 
     return SingleChildScrollView(
@@ -2174,7 +2238,8 @@ class _FormationMiniPainter extends CustomPainter {
     canvas.drawCircle(Offset(cx, cy), 2.1, shipPaint);
 
     final Paint dronePaint = Paint()..color = accent;
-    const double previewScale = 0.125;
+    final double previewScale =
+        formation == DroneFormation.wheel ? 0.095 : 0.125;
 
     for (int i = 0; i < 8; i++) {
       final DroneFormationSlot slot = DroneFormationCatalog.computeLocalSlot(

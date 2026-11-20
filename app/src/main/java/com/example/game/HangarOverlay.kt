@@ -93,6 +93,9 @@ fun HangarShopOverlay(
     onUnequipShieldSlot: (Int) -> Unit,
     onUnequipSectorChip: () -> Unit,
     onClaimMissionReward: () -> Unit,
+    onResetSave: () -> Unit,
+    onDebugAddCredits: () -> Unit,
+    onDebugAddLevel: () -> Unit,
     onClose: () -> Unit
 ) {
     // 0 = EQUIPMENT, 1 = VANTS, 2 = SHOP, 3 = FUSE, 4 = MISSIONS
@@ -271,10 +274,13 @@ fun HangarShopOverlay(
                 }
             }
 
-            // 2. Compact Live Ship Stats Summary Bar + Always-Accessible Config 1 / Config 2 Toggle
+            // 2. Compact Live Ship Stats Summary Bar + Config 1 / Config 2 Toggle + Dev & Reset Buttons
             LiveStatsSummaryBar(
                 equipment = equipment,
-                onSwitchConfig = onSwitchConfig
+                onSwitchConfig = onSwitchConfig,
+                onResetSave = onResetSave,
+                onDebugAddCredits = onDebugAddCredits,
+                onDebugAddLevel = onDebugAddLevel
             )
 
             // 3. Active Tab Content
@@ -363,7 +369,10 @@ private fun HangarTabButton(
 @Composable
 private fun LiveStatsSummaryBar(
     equipment: EquipmentSnapshot,
-    onSwitchConfig: (Int) -> Unit
+    onSwitchConfig: (Int) -> Unit,
+    onResetSave: () -> Unit,
+    onDebugAddCredits: () -> Unit,
+    onDebugAddLevel: () -> Unit
 ) {
     val shipAccent = Color(equipment.activeShipClass.accentColorHex)
     Row(
@@ -374,6 +383,7 @@ private fun LiveStatsSummaryBar(
             .clip(RoundedCornerShape(10.dp))
             .background(Color(0xFF071020))
             .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 5.dp)
             .testTag("hangar_stats_bar")
     ) {
@@ -431,30 +441,91 @@ private fun LiveStatsSummaryBar(
             icon = Icons.Default.Bolt,
             label = stringResource(R.string.stat_dmg),
             value = equipment.totalDamage.toString(),
-            accent = CrimsonDanger,
-            modifier = Modifier.weight(1f)
+            accent = CrimsonDanger
         )
         LiveStatPill(
             icon = Icons.Default.Shield,
             label = stringResource(R.string.stat_shd),
             value = equipment.totalMaxShield.toString(),
-            accent = CyanThruster,
-            modifier = Modifier.weight(1f)
+            accent = CyanThruster
         )
         LiveStatPill(
             icon = Icons.Default.Speed,
             label = stringResource(R.string.stat_spd),
             value = equipment.totalSpeed.toString(),
-            accent = AmberCredits,
-            modifier = Modifier.weight(1f)
+            accent = AmberCredits
         )
         LiveStatPill(
             icon = Icons.Default.Favorite,
             label = stringResource(R.string.stat_hull),
             value = equipment.totalMaxHull.toString(),
-            accent = EmeraldHull,
-            modifier = Modifier.weight(1f)
+            accent = EmeraldHull
         )
+
+        Spacer(modifier = Modifier.width(6.dp))
+
+        // Temporary Developer / Testing Buttons next to RESET SAVE
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Color(0x33F59E0B))
+                    .border(1.dp, AmberCredits.copy(alpha = 0.85f), RoundedCornerShape(7.dp))
+                    .clickable(onClick = onDebugAddCredits)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .testTag("hangar_debug_add_credits")
+            ) {
+                Text(
+                    text = stringResource(R.string.action_debug_add_credits),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AmberCredits,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Color(0x33A855F7))
+                    .border(1.dp, Color(0xFFC084FC), RoundedCornerShape(7.dp))
+                    .clickable(onClick = onDebugAddLevel)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .testTag("hangar_debug_add_level")
+            ) {
+                Text(
+                    text = stringResource(R.string.action_debug_add_level),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFE9D5FF),
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Color(0x28FF2E4C))
+                    .border(1.dp, CrimsonDanger.copy(alpha = 0.75f), RoundedCornerShape(7.dp))
+                    .clickable(onClick = onResetSave)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .testTag("hangar_reset_save_button")
+            ) {
+                Text(
+                    text = stringResource(R.string.action_reset_save),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFFF6B81),
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
     }
 }
 
@@ -1304,11 +1375,10 @@ private fun ShopTabContent(
             }
         }
 
-        // 2. Minimalist Base Level 1 Equipment ONLY (LF-1, SG-1, Chip Lv 1)
+        // 2. Minimalist Base Level 1 Equipment ONLY (LF-1 Laser, SG-1 Shield, and Flax VANT; no Sector Chips)
         val baseItems = listOf(
             EquipmentItemId.LF_1,
-            EquipmentItemId.SG_1,
-            EquipmentItemId.CHIP_1
+            EquipmentItemId.SG_1
         )
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -1608,7 +1678,7 @@ private fun FormationMiniPreview(formation: DroneFormation) {
                 radius = 2.4f,
                 center = androidx.compose.ui.geometry.Offset(cx, cy)
             )
-            val previewScale = 0.145f
+            val previewScale = if (formation == DroneFormation.WHEEL) 0.105f else 0.145f
             for (i in 0 until 8) {
                 val (localX, localY, _) = formation.computeLocalSlot(
                     index = i,

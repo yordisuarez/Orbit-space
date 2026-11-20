@@ -82,10 +82,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -406,9 +409,9 @@ fun TacticalMinimap(
             .size(134.dp)
             .clip(CircleShape)
             .background(SpaceHudPanel)
-            .border(1.8.dp, CrimsonDanger.copy(alpha = 0.7f), CircleShape)
+            .border(1.8.dp, CyanLaser.copy(alpha = 0.72f), CircleShape)
             .clickable(onClick = onExpandMap)
-            .padding(6.dp)
+            .padding(4.dp)
             .testTag("tactical_minimap")
             .semantics { contentDescription = mapDesc }
     ) {
@@ -418,170 +421,256 @@ fun TacticalMinimap(
 
             val center = Offset(size.width * 0.5f, size.height * 0.5f)
             val radarRadius = size.minDimension * 0.5f
-            val usableRadius = radarRadius - 4f
-            val scale = usableRadius / GameConfig.MAP_RADIUS
-            val bossPulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
+            val viewRadius = GameConfig.HUD_MINIMAP_VIEW_RADIUS
+            val scale = (radarRadius - 2f) / viewRadius
+            val pulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
 
-            val gridColor = Color(0x2238BDF8)
-            drawLine(
-                color = gridColor,
-                start = Offset(center.x - radarRadius, center.y),
-                end = Offset(center.x + radarRadius, center.y),
-                strokeWidth = 0.9f
-            )
-            drawLine(
-                color = gridColor,
-                start = Offset(center.x, center.y - radarRadius),
-                end = Offset(center.x, center.y + radarRadius),
-                strokeWidth = 0.9f
+            val playerX = engine.player.x
+            val playerY = engine.player.y
+            val playerOriginDist = hypot(playerX, playerY)
+            val baseCenter = Offset(
+                center.x - playerX * scale,
+                center.y - playerY * scale
             )
 
-            drawCircle(
-                color = Color(0x664ADE80),
-                radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
-                center = center,
-                style = Stroke(width = 1.0f)
-            )
-            drawCircle(
-                color = Color(0x66FACC15),
-                radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
-                center = center,
-                style = Stroke(width = 1.0f)
-            )
-            drawCircle(
-                color = Color(0x66FB923C),
-                radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
-                center = center,
-                style = Stroke(width = 1.0f)
-            )
-            drawCircle(
-                color = CrimsonDanger.copy(alpha = 0.65f),
-                radius = radarRadius - 1f,
-                center = center,
-                style = Stroke(width = 1.6f)
-            )
-
-            val safeZoneRadarR = (GameConfig.SAFE_ZONE_RADIUS * scale).coerceAtLeast(4.5f)
-            drawCircle(
-                color = CyanLaser.copy(alpha = 0.22f),
-                radius = safeZoneRadarR,
-                center = center
-            )
-            drawCircle(
-                color = CyanLaser.copy(alpha = 0.85f),
-                radius = safeZoneRadarR,
-                center = center,
-                style = Stroke(width = 1.2f)
-            )
-            drawCircle(
-                color = CyanLaser,
-                radius = 2.4f,
-                center = center
-            )
-
-            for (box in engine.lootBoxes) {
-                val bx = center.x + box.x * scale
-                val by = center.y + box.y * scale
-                drawCircle(
-                    color = if (box.kind == LootBoxKind.CARGO_BOX) AmberCredits else Color(0x99FACC15),
-                    radius = if (box.kind == LootBoxKind.CARGO_BOX) 1.9f else 1.2f,
-                    center = Offset(bx, by)
+            val clipCircle = Path().apply {
+                addOval(
+                    Rect(
+                        left = center.x - radarRadius,
+                        top = center.y - radarRadius,
+                        right = center.x + radarRadius,
+                        bottom = center.y + radarRadius
+                    )
                 )
             }
 
-            val lockedId = engine.lockedAlienId
-            for (alien in engine.aliens) {
-                val ax = center.x + alien.x * scale
-                val ay = center.y + alien.y * scale
-                val tierColor = Color(alien.tier.primaryColorHex)
-                if (alien.id == lockedId) {
+            clipPath(clipCircle) {
+                // Local radar range ring (half-range = 2,250 units) & crosshairs
+                val gridColor = Color(0x2638BDF8)
+                drawCircle(
+                    color = gridColor,
+                    radius = radarRadius * 0.5f,
+                    center = center,
+                    style = Stroke(width = 0.9f)
+                )
+                drawLine(
+                    color = gridColor,
+                    start = Offset(center.x - radarRadius, center.y),
+                    end = Offset(center.x + radarRadius, center.y),
+                    strokeWidth = 0.85f
+                )
+                drawLine(
+                    color = gridColor,
+                    start = Offset(center.x, center.y - radarRadius),
+                    end = Offset(center.x, center.y + radarRadius),
+                    strokeWidth = 0.85f
+                )
+
+                // Curved arcs of concentric Sector rings & outer red border when within local radar range
+                val ringDash = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f)
+                if (abs(playerOriginDist - GameConfig.ZONE_1_MAX_RADIUS) <= viewRadius + 250f) {
                     drawCircle(
-                        color = CrimsonDanger.copy(alpha = 0.78f),
-                        radius = (if (alien.isBoss) alien.tier.minimapDotRadius + 5.0f else alien.tier.minimapDotRadius + 3.2f),
-                        center = Offset(ax, ay),
-                        style = Stroke(width = 1.4f)
+                        color = Color(0x994ADE80),
+                        radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
+                        center = baseCenter,
+                        style = Stroke(width = 1.4f, pathEffect = ringDash)
                     )
                 }
-                if (alien.isBoss) {
+                if (abs(playerOriginDist - GameConfig.ZONE_2_MAX_RADIUS) <= viewRadius + 250f) {
                     drawCircle(
-                        color = AmberCredits.copy(alpha = 0.28f + 0.35f * bossPulse),
-                        radius = alien.tier.minimapDotRadius + 2.8f + 1.4f * bossPulse,
-                        center = Offset(ax, ay)
+                        color = Color(0x99FACC15),
+                        radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
+                        center = baseCenter,
+                        style = Stroke(width = 1.4f, pathEffect = ringDash)
+                    )
+                }
+                if (abs(playerOriginDist - GameConfig.ZONE_3_MAX_RADIUS) <= viewRadius + 250f) {
+                    drawCircle(
+                        color = Color(0x99FB923C),
+                        radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
+                        center = baseCenter,
+                        style = Stroke(width = 1.4f, pathEffect = ringDash)
+                    )
+                }
+                if (abs(playerOriginDist - GameConfig.MAP_RADIUS) <= viewRadius + 250f) {
+                    drawCircle(
+                        color = CrimsonDanger.copy(alpha = 0.9f),
+                        radius = GameConfig.MAP_RADIUS * scale,
+                        center = baseCenter,
+                        style = Stroke(width = 2.4f)
+                    )
+                }
+
+                // Central Safe Zone Base (when within local radar range)
+                if (playerOriginDist <= viewRadius + GameConfig.SAFE_ZONE_RADIUS + 120f) {
+                    val safeR = GameConfig.SAFE_ZONE_RADIUS * scale
+                    drawCircle(
+                        color = CyanLaser.copy(alpha = 0.22f),
+                        radius = safeR,
+                        center = baseCenter
                     )
                     drawCircle(
-                        color = CrimsonDanger,
-                        radius = alien.tier.minimapDotRadius + 1.3f,
-                        center = Offset(ax, ay)
+                        color = CyanLaser.copy(alpha = 0.9f),
+                        radius = safeR,
+                        center = baseCenter,
+                        style = Stroke(width = 1.5f)
                     )
                     drawCircle(
-                        color = AmberCredits,
-                        radius = alien.tier.minimapDotRadius * 0.65f,
-                        center = Offset(ax, ay)
+                        color = Color.White,
+                        radius = 2.8f,
+                        center = baseCenter
                     )
-                } else {
-                    if (alien.tier == AlienTier.DREADNOUGHT_BOSS) {
+                }
+
+                // Nearby Bonus & Cargo Boxes within 4,500-unit radar radius
+                val boxCutoffSq = (viewRadius + 150f) * (viewRadius + 150f)
+                for (box in engine.lootBoxes) {
+                    val dx = box.x - playerX
+                    val dy = box.y - playerY
+                    if (dx * dx + dy * dy > boxCutoffSq) continue
+                    val bx = center.x + dx * scale
+                    val by = center.y + dy * scale
+                    val isCargo = box.kind == LootBoxKind.CARGO_BOX
+                    drawCircle(
+                        color = if (isCargo) AmberCredits else Color(0xCCFACC15),
+                        radius = if (isCargo) 2.7f else 1.9f,
+                        center = Offset(bx, by)
+                    )
+                }
+
+                // Nearby Normal & Pulsing BOSS Aliens within 4,500-unit radar radius
+                val alienCutoffSq = (viewRadius + 260f) * (viewRadius + 260f)
+                val lockedId = engine.lockedAlienId
+                for (alien in engine.aliens) {
+                    val dx = alien.x - playerX
+                    val dy = alien.y - playerY
+                    if (dx * dx + dy * dy > alienCutoffSq) continue
+                    val ax = center.x + dx * scale
+                    val ay = center.y + dy * scale
+                    val tierColor = Color(alien.tier.primaryColorHex)
+
+                    if (alien.id == lockedId) {
                         drawCircle(
-                            color = tierColor.copy(alpha = 0.32f),
+                            color = CrimsonDanger.copy(alpha = 0.88f),
+                            radius = if (alien.isBoss) alien.tier.minimapDotRadius + 6.0f else alien.tier.minimapDotRadius + 4.0f,
+                            center = Offset(ax, ay),
+                            style = Stroke(width = 1.5f)
+                        )
+                    }
+                    if (alien.isBoss) {
+                        drawCircle(
+                            color = AmberCredits.copy(alpha = 0.28f + 0.40f * pulse),
+                            radius = alien.tier.minimapDotRadius + 4.0f + 2.0f * pulse,
+                            center = Offset(ax, ay)
+                        )
+                        drawCircle(
+                            color = CrimsonDanger,
                             radius = alien.tier.minimapDotRadius + 2.0f,
                             center = Offset(ax, ay)
                         )
+                        drawCircle(
+                            color = AmberCredits,
+                            radius = alien.tier.minimapDotRadius * 0.78f,
+                            center = Offset(ax, ay)
+                        )
+                    } else {
+                        drawCircle(
+                            color = tierColor,
+                            radius = (alien.tier.minimapDotRadius * 1.15f).coerceAtLeast(2.7f),
+                            center = Offset(ax, ay)
+                        )
                     }
-                    drawCircle(
-                        color = tierColor,
-                        radius = alien.tier.minimapDotRadius,
-                        center = Offset(ax, ay)
-                    )
                 }
+
+                // Active Autopilot dashed trajectory line from center toward waypoint (or edge beacon if > 4,500u)
+                val apX = engine.autopilotTargetX
+                val apY = engine.autopilotTargetY
+                if (apX != null && apY != null) {
+                    val dx = apX - playerX
+                    val dy = apY - playerY
+                    val worldDist = hypot(dx, dy)
+                    if (worldDist > 1f) {
+                        val ux = dx / worldDist
+                        val uy = dy / worldDist
+                        val withinRadar = worldDist <= viewRadius
+                        val endOffset = if (withinRadar) {
+                            Offset(center.x + dx * scale, center.y + dy * scale)
+                        } else {
+                            Offset(
+                                center.x + ux * (radarRadius - 4f),
+                                center.y + uy * (radarRadius - 4f)
+                            )
+                        }
+                        drawLine(
+                            color = CyanLaser.copy(alpha = 0.80f),
+                            start = center,
+                            end = endOffset,
+                            strokeWidth = 1.6f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
+                        )
+                        if (withinRadar) {
+                            drawCircle(
+                                color = CyanLaser.copy(alpha = 0.5f + 0.45f * pulse),
+                                radius = 5.0f + 1.5f * pulse,
+                                center = endOffset,
+                                style = Stroke(width = 1.4f)
+                            )
+                            drawCircle(
+                                color = Color.White,
+                                radius = 2.0f,
+                                center = endOffset
+                            )
+                        } else {
+                            // Edge directional indicator pointing toward off-radar waypoint
+                            val edgeTip = Offset(
+                                center.x + ux * (radarRadius - 1.5f),
+                                center.y + uy * (radarRadius - 1.5f)
+                            )
+                            val edgeLeft = Offset(
+                                center.x + ux * (radarRadius - 8.5f) - uy * 4.2f,
+                                center.y + uy * (radarRadius - 8.5f) + ux * 4.2f
+                            )
+                            val edgeRight = Offset(
+                                center.x + ux * (radarRadius - 8.5f) + uy * 4.2f,
+                                center.y + uy * (radarRadius - 8.5f) - ux * 4.2f
+                            )
+                            val beacon = Path().apply {
+                                moveTo(edgeTip.x, edgeTip.y)
+                                lineTo(edgeLeft.x, edgeLeft.y)
+                                lineTo(edgeRight.x, edgeRight.y)
+                                close()
+                            }
+                            drawPath(path = beacon, color = CyanLaser.copy(alpha = 0.65f + 0.35f * pulse))
+                        }
+                    }
+                }
+
+                // Crisp bright cyan/white directional player arrow locked at exact center
+                val angle = engine.player.angleRad
+                val cosA = cos(angle)
+                val sinA = sin(angle)
+                drawCircle(
+                    color = CyanLaser.copy(alpha = 0.28f),
+                    radius = 12.5f,
+                    center = center
+                )
+                val arrow = Path().apply {
+                    moveTo(center.x + cosA * 10.5f, center.y + sinA * 10.5f)
+                    lineTo(center.x + (-cosA * 6.5f - sinA * 6.5f), center.y + (-sinA * 6.5f + cosA * 6.5f))
+                    lineTo(center.x - cosA * 2.5f, center.y - sinA * 2.5f)
+                    lineTo(center.x + (-cosA * 6.5f + sinA * 6.5f), center.y + (-sinA * 6.5f - cosA * 6.5f))
+                    close()
+                }
+                drawPath(path = arrow, color = CyanLaser)
+                drawPath(path = arrow, color = Color.White, style = Stroke(width = 1.6f))
             }
 
-            val px = center.x + engine.player.x * scale
-            val py = center.y + engine.player.y * scale
-
-            // Active Autopilot dashed trajectory & waypoint on small minimap
-            val apX = engine.autopilotTargetX
-            val apY = engine.autopilotTargetY
-            if (apX != null && apY != null) {
-                val tx = center.x + apX * scale
-                val ty = center.y + apY * scale
-                drawLine(
-                    color = CyanLaser.copy(alpha = 0.65f),
-                    start = Offset(px, py),
-                    end = Offset(tx, ty),
-                    strokeWidth = 1.3f,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
-                )
-                drawCircle(
-                    color = CyanLaser.copy(alpha = 0.5f + 0.45f * bossPulse),
-                    radius = 4.2f,
-                    center = Offset(tx, ty),
-                    style = Stroke(width = 1.2f)
-                )
-                drawCircle(
-                    color = CyanLaser,
-                    radius = 1.8f,
-                    center = Offset(tx, ty)
-                )
-            }
-
-            val shipAccent = Color(engine.player.shipClass.accentColorHex)
+            // Crisp radar rim
             drawCircle(
-                color = shipAccent.copy(alpha = 0.35f),
-                radius = 7.0f,
-                center = Offset(px, py)
-            )
-            drawCircle(
-                color = shipAccent,
-                radius = 3.8f,
-                center = Offset(px, py)
-            )
-            drawLine(
-                color = Color.White.copy(alpha = 0.85f),
-                start = Offset(px, py),
-                end = Offset(
-                    px + cos(engine.player.angleRad) * 7.2f,
-                    py + sin(engine.player.angleRad) * 7.2f
-                ),
-                strokeWidth = 1.5f
+                color = CyanLaser.copy(alpha = 0.45f),
+                radius = radarRadius - 0.8f,
+                center = center,
+                style = Stroke(width = 1.2f)
             )
         }
     }
@@ -892,28 +981,38 @@ fun ExpandableTacticalMapOverlay(
                         )
                     }
 
-                    // Player directional chevron
-                    val shipAccent = Color(engine.player.shipClass.accentColorHex)
+                    // High-visibility glowing Player directional chevron on full Tactical Map
                     drawCircle(
-                        color = shipAccent.copy(alpha = 0.30f),
-                        radius = 12f,
+                        color = CyanLaser.copy(alpha = 0.16f + 0.14f * pulse),
+                        radius = 20f + 4.5f * pulse,
                         center = Offset(px, py)
+                    )
+                    drawCircle(
+                        color = CyanLaser.copy(alpha = 0.40f),
+                        radius = 13.5f,
+                        center = Offset(px, py)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.55f + 0.35f * pulse),
+                        radius = 16.5f + 2.5f * pulse,
+                        center = Offset(px, py),
+                        style = Stroke(width = 1.4f)
                     )
                     val angle = engine.player.angleRad
                     val cosA = cos(angle)
                     val sinA = sin(angle)
-                    val tip = Offset(px + cosA * 10f, py + sinA * 10f)
-                    val left = Offset(px + (-cosA * 6f - sinA * 6f), py + (-sinA * 6f + cosA * 6f))
-                    val right = Offset(px + (-cosA * 6f + sinA * 6f), py + (-sinA * 6f - cosA * 6f))
+                    val tip = Offset(px + cosA * 15f, py + sinA * 15f)
+                    val left = Offset(px + (-cosA * 9f - sinA * 9f), py + (-sinA * 9f + cosA * 9f))
+                    val right = Offset(px + (-cosA * 9f + sinA * 9f), py + (-sinA * 9f - cosA * 9f))
                     val chevron = Path().apply {
                         moveTo(tip.x, tip.y)
                         lineTo(left.x, left.y)
-                        lineTo(px - cosA * 2f, py - sinA * 2f)
+                        lineTo(px - cosA * 3.2f, py - sinA * 3.2f)
                         lineTo(right.x, right.y)
                         close()
                     }
-                    drawPath(path = chevron, color = shipAccent)
-                    drawPath(path = chevron, color = Color.White, style = Stroke(width = 1.4f))
+                    drawPath(path = chevron, color = CyanLaser)
+                    drawPath(path = chevron, color = Color.White, style = Stroke(width = 2.0f))
                 }
             }
         }

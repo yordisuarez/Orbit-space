@@ -29,9 +29,10 @@ object GameConfig {
     const val BOSS_REWARD_MULTIPLIER = 4
     const val BOSS_SIZE_MULTIPLIER = 1.5f
 
-    // Tactical Map Autopilot
+    // Tactical Map Autopilot & Local Radar Minimap
     const val AUTOPILOT_STOP_RADIUS = 60f
     const val AUTOPILOT_MAX_TARGET_RADIUS = 19800f
+    const val HUD_MINIMAP_VIEW_RADIUS = 4500f
 
     // Sector 1 Alien Base Stats & 2.5x Exponential Scaling
     const val SECTOR_BASE_ALIEN_HP = 120.0
@@ -439,12 +440,25 @@ enum class DroneFormation(
             }
 
             WHEEL -> {
-                // High-speed spinning wheel formation
-                val r = hullRadius + 30f
-                val theta = -elapsedTime * 3.1f + index * (2f * Math.PI.toFloat() / count)
-                val lx = kotlin.math.cos(theta) * r
-                val ly = kotlin.math.sin(theta) * r
-                Triple(lx, ly, theta - Math.PI.toFloat() * 0.5f)
+                // Two side-flank spinning circles: left flank (-Y) and right flank (+Y), opposite spin
+                val leftCount = (count + 1) / 2
+                val rightCount = count - leftCount
+                val flankOffset = 70f
+                val wheelRadius = 35f
+                val spinSpeed = 3.2f
+                if (index < leftCount) {
+                    val theta = elapsedTime * spinSpeed + index * (2f * Math.PI.toFloat() / leftCount)
+                    val lx = kotlin.math.cos(theta) * wheelRadius
+                    val ly = -flankOffset + kotlin.math.sin(theta) * wheelRadius
+                    Triple(lx, ly, theta + Math.PI.toFloat() * 0.5f)
+                } else {
+                    val rightIdx = index - leftCount
+                    val safeRight = rightCount.coerceAtLeast(1)
+                    val theta = -elapsedTime * spinSpeed + rightIdx * (2f * Math.PI.toFloat() / safeRight)
+                    val lx = kotlin.math.cos(theta) * wheelRadius
+                    val ly = flankOffset + kotlin.math.sin(theta) * wheelRadius
+                    Triple(lx, ly, theta - Math.PI.toFloat() * 0.5f)
+                }
             }
         }
     }
@@ -506,8 +520,8 @@ enum class EquipmentItemId(
     SG_3("SG-3", "SG-3 Shield", EquipmentCategory.SHIELD_GENERATOR, 3, null, shieldBonus = 380f, accentHex = 0xFF6366F1),
     SG_4("SG-4", "SG-4 Shield", EquipmentCategory.SHIELD_GENERATOR, 4, null, shieldBonus = 750f, accentHex = 0xFFA855F7),
 
-    // Sector Chips (Chip Lv 1 sold in Shop & Mission 3; Lv 2..4 forged via 2-for-1 Fusion & final missions)
-    CHIP_1("CH-1", "Chip Lv 1", EquipmentCategory.SECTOR_CHIP, 1, 300, sectorTier = 0, accentHex = 0xFF94A3B8),
+    // Sector Chips (Starter Chip Lv 1 granted by default; Mission 3/6/8 rewards & 2-for-1 Fusion only)
+    CHIP_1("CH-1", "Chip Lv 1", EquipmentCategory.SECTOR_CHIP, 1, null, sectorTier = 0, accentHex = 0xFF94A3B8),
     CHIP_2("CH-2", "Chip Lv 2", EquipmentCategory.SECTOR_CHIP, 2, null, sectorTier = 1, accentHex = 0xFFFACC15),
     CHIP_3("CH-3", "Chip Lv 3", EquipmentCategory.SECTOR_CHIP, 3, null, sectorTier = 2, accentHex = 0xFFFB923C),
     CHIP_4("CH-4", "Chip Lv 4", EquipmentCategory.SECTOR_CHIP, 4, null, sectorTier = 3, accentHex = 0xFFC084FC);

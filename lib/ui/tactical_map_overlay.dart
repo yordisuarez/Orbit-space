@@ -354,35 +354,47 @@ class _TacticalMapPainter extends CustomPainter {
       canvas.drawCircle(targetPos, 2.4, Paint()..color = Colors.white);
     }
 
-    // Player directional chevron
-    final Color shipAccent = game.activeShipSpec.accentColor;
+    // High-visibility glowing Player directional chevron on full 20,000u Tactical Map
     canvas.drawCircle(
       playerPos,
-      11.5,
-      Paint()..color = shipAccent.withOpacity(0.30),
+      19.0 + 4.5 * pulse,
+      Paint()..color = const Color(0xFF00E5FF).withOpacity(0.16 + 0.14 * pulse),
+    );
+    canvas.drawCircle(
+      playerPos,
+      13.0,
+      Paint()..color = const Color(0x6600E5FF),
+    );
+    canvas.drawCircle(
+      playerPos,
+      16.0 + 2.5 * pulse,
+      Paint()
+        ..color = Colors.white.withOpacity(0.55 + 0.35 * pulse)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4,
     );
     final double a = game.player.angle;
     final double cA = cos(a);
     final double sA = sin(a);
     final Path chevron = Path()
-      ..moveTo(playerPos.dx + cA * 10.0, playerPos.dy + sA * 10.0)
+      ..moveTo(playerPos.dx + cA * 14.5, playerPos.dy + sA * 14.5)
       ..lineTo(
-        playerPos.dx + (-cA * 6.0 - sA * 6.0),
-        playerPos.dy + (-sA * 6.0 + cA * 6.0),
+        playerPos.dx + (-cA * 8.8 - sA * 8.8),
+        playerPos.dy + (-sA * 8.8 + cA * 8.8),
       )
-      ..lineTo(playerPos.dx - cA * 2.0, playerPos.dy - sA * 2.0)
+      ..lineTo(playerPos.dx - cA * 3.0, playerPos.dy - sA * 3.0)
       ..lineTo(
-        playerPos.dx + (-cA * 6.0 + sA * 6.0),
-        playerPos.dy + (-sA * 6.0 - cA * 6.0),
+        playerPos.dx + (-cA * 8.8 + sA * 8.8),
+        playerPos.dy + (-sA * 8.8 - cA * 8.8),
       )
       ..close();
-    canvas.drawPath(chevron, Paint()..color = shipAccent);
+    canvas.drawPath(chevron, Paint()..color = const Color(0xFF00E5FF));
     canvas.drawPath(
       chevron,
       Paint()
         ..color = Colors.white
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
+        ..strokeWidth = 2.0,
     );
   }
 

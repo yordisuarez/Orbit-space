@@ -35,6 +35,7 @@ class GameConstants {
 
   static const double autopilotStopRadius = 60.0;
   static const double autopilotMaxTargetRadius = 19800.0;
+  static const double hudMinimapViewRadius = 4500.0;
 
   static const double playerAttackRange = 520.0;
   static const double playerFireInterval = 0.24;
@@ -691,13 +692,31 @@ class DroneFormationCatalog {
         );
 
       case DroneFormation.wheel:
-        final double r = baseR * 1.32;
-        final double spin = elapsedTime * 3.4 + (index * (2.0 * pi / safeTotal));
-        return DroneFormationSlot(
-          localX: cos(spin) * r,
-          localY: sin(spin) * r,
-          extraRotation: spin + pi * 0.5,
-        );
+        // Two side-flank spinning circles: left (-Y) & right (+Y) anchors, opposite spin
+        final int leftCount = (safeTotal + 1) ~/ 2;
+        final int rightCount = safeTotal - leftCount;
+        const double flankOffset = 70.0;
+        const double wheelRadius = 35.0;
+        const double spinSpeed = 3.2;
+        if (index < leftCount) {
+          final double theta =
+              elapsedTime * spinSpeed + (index * (2.0 * pi / leftCount));
+          return DroneFormationSlot(
+            localX: cos(theta) * wheelRadius,
+            localY: -flankOffset + sin(theta) * wheelRadius,
+            extraRotation: theta + pi * 0.5,
+          );
+        } else {
+          final int rightIdx = index - leftCount;
+          final int safeRight = max(1, rightCount);
+          final double theta =
+              -elapsedTime * spinSpeed + (rightIdx * (2.0 * pi / safeRight));
+          return DroneFormationSlot(
+            localX: cos(theta) * wheelRadius,
+            localY: flankOffset + sin(theta) * wheelRadius,
+            extraRotation: theta - pi * 0.5,
+          );
+        }
     }
   }
 }
@@ -846,7 +865,6 @@ class EquipmentCatalog {
       displayName: 'Chip Lv 1',
       category: EquipmentCategory.sectorChip,
       tierLevel: 1,
-      shopCost: 300,
       sectorTier: 0,
       accentColor: Color(0xFF94A3B8),
     ),

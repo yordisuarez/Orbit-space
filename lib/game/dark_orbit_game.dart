@@ -353,11 +353,16 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       instanceId: _nextItemInstanceId++,
       id: EquipmentItemId.sg1,
     );
-    ownedItems.addAll(<EquipmentItem>[starterLaser, starterShield]);
+    final EquipmentItem starterChip = EquipmentItem(
+      instanceId: _nextItemInstanceId++,
+      id: EquipmentItemId.chip1,
+    );
+    ownedItems.addAll(<EquipmentItem>[starterLaser, starterShield, starterChip]);
     config1LaserSlots[0] = starterLaser;
     config1ShieldSlots[0] = starterShield;
     config2LaserSlots[0] = starterLaser;
     config2ShieldSlots[0] = starterShield;
+    equippedSectorChip = starterChip;
   }
 
   Future<void> saveGame() async {
@@ -623,6 +628,20 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
           (chip != null && chip.spec.category == EquipmentCategory.sectorChip)
               ? chip
               : null;
+
+      // Failsafe: if loaded save has no Chip equipped AND none in Inventory, grant & equip 1x Chip Lv 1
+      final bool hasAnyChip = equippedSectorChip != null ||
+          ownedItems.any(
+            (EquipmentItem e) => e.spec.category == EquipmentCategory.sectorChip,
+          );
+      if (!hasAnyChip) {
+        final EquipmentItem fallbackChip = EquipmentItem(
+          instanceId: _nextItemInstanceId++,
+          id: EquipmentItemId.chip1,
+        );
+        ownedItems.add(fallbackChip);
+        equippedSectorChip = fallbackChip;
+      }
 
       final int rawMissionIdx = (data['currentMissionIndex'] as int?) ?? 0;
       currentMissionIndex = rawMissionIdx.clamp(0, MissionCatalog.all.length);
@@ -1363,6 +1382,21 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
   }
 
+  // Temporary Developer / Testing Helpers
+  void debugAddOneMillionCredits() {
+    credits += 1000000;
+    saveGame();
+  }
+
+  void debugAddOneLevel() {
+    final int needed = max(
+      1,
+      GameConstants.xpRequiredForLevel(player.level) - player.xp,
+    );
+    addXp(needed);
+    saveGame();
+  }
+
   // ---------------------------------------------------------------------------
   // Combat: Laser Toggle & Homing Rockets
   // ---------------------------------------------------------------------------
@@ -2000,6 +2034,7 @@ class PlayerShipComponent extends PositionComponent
       rocketCooldown = max(0.0, rocketCooldown - dt);
     }
 
+    double? movementAngle;
     final Vector2 move = gameRef.moveJoystick.relativeDelta;
     if (move.length > 0.12) {
       // Instant manual override cancels Autopilot
@@ -2007,21 +2042,39 @@ class PlayerShipComponent extends PositionComponent
         gameRef.cancelAutopilot();
       }
       position.add(move.normalized() * (gameRef.currentSpeed * dt));
-      angle = atan2(move.y, move.x);
+      movementAngle = atan2(move.y, move.x);
     } else if (gameRef.autopilotTarget != null) {
       final Vector2 toAp = gameRef.autopilotTarget! - position;
       final double apDist = toAp.length;
       if (apDist <= GameConstants.autopilotStopRadius) {
         gameRef.cancelAutopilot();
       } else {
-        final double desiredAngle = atan2(toAp.y, toAp.x);
-        final double angleDiff = gameRef._normalizeAngle(desiredAngle - angle);
-        angle = gameRef._normalizeAngle(
-          angle + angleDiff * (1.0 - exp(-9.0 * dt)),
-        );
+        movementAngle = atan2(toAp.y, toAp.x);
         final double step = min(apDist, gameRef.currentSpeed * dt);
         position.add(toAp.normalized() * step);
       }
+    }
+
+    // Combat Facing Override: smoothly face locked alien whenever actively attacking
+    final AlienShipComponent? combatTarget = gameRef.lockedTarget;
+    final bool isActivelyAttacking = gameRef.autoFireEnabled &&
+        !inSafeZone &&
+        combatTarget != null &&
+        !combatTarget.isRemoved;
+    if (isActivelyAttacking) {
+      final double aimAngle = atan2(
+        combatTarget.position.y - position.y,
+        combatTarget.position.x - position.x,
+      );
+      final double diff = gameRef._normalizeAngle(aimAngle - angle);
+      angle = gameRef._normalizeAngle(
+        angle + diff * (1.0 - exp(-14.0 * dt)),
+      );
+    } else if (movementAngle != null) {
+      final double diff = gameRef._normalizeAngle(movementAngle - angle);
+      angle = gameRef._normalizeAngle(
+        angle + diff * (1.0 - exp(-11.0 * dt)),
+      );
     }
 
     const double maxPlayerRadius =
@@ -2406,13 +2459,10 @@ class VantFleetComponent extends Component with HasGameRef<DarkOrbitGame> {
     final double pulse = 0.75 + 0.25 * sin(gameRef.elapsedTime * 6.5);
     final Color formAccent = gameRef.activeFormationSpec.accentColor;
 
-    // Subtle formation ring guide for RING and WHEEL formations
-    if (gameRef.activeFormation == DroneFormation.ring ||
-        gameRef.activeFormation == DroneFormation.wheel) {
+    // Subtle formation ring guide for RING formation only (WHEEL draws drones only)
+    if (gameRef.activeFormation == DroneFormation.ring) {
       final double baseR = gameRef.activeShipSpec.hullRadius + 28.0;
-      final double r = gameRef.activeFormation == DroneFormation.ring
-          ? baseR * 1.08
-          : baseR * 1.32;
+      final double r = baseR * 1.08;
       canvas.drawCircle(
         Offset(gameRef.player.position.x, gameRef.player.position.y),
         r,
@@ -3796,142 +3846,273 @@ class MinimapComponent extends PositionComponent
   void render(Canvas canvas) {
     final Offset center = Offset(size.x * 0.5, size.y * 0.5);
     final double radarR = size.x * 0.5;
-    final double scale = (radarR - 4.0) / GameConstants.mapRadius;
+    const double viewRadius = GameConstants.hudMinimapViewRadius;
+    final double scale = (radarR - 2.0) / viewRadius;
     final double pulse = 0.55 + 0.45 * sin(gameRef.elapsedTime * 6.5);
 
+    final double playerX = gameRef.player.position.x;
+    final double playerY = gameRef.player.position.y;
+    final double playerOriginDist = sqrt(playerX * playerX + playerY * playerY);
+    final Offset baseCenter = Offset(
+      center.dx - playerX * scale,
+      center.dy - playerY * scale,
+    );
+
     canvas.drawCircle(center, radarR, Paint()..color = const Color(0xCC0B1324));
-    canvas.drawCircle(
-      center,
-      GameConstants.zone1MaxRadius * scale,
-      Paint()
-        ..color = const Color(0x664ADE80)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
+
+    final Path clipCircle = Path()
+      ..addOval(Rect.fromCircle(center: center, radius: radarR - 1.0));
+    canvas.save();
+    canvas.clipPath(clipCircle);
+
+    // Subtle local radar range ring (2,250u) & crosshairs
+    final Paint gridPaint = Paint()
+      ..color = const Color(0x2638BDF8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
+    canvas.drawCircle(center, radarR * 0.5, gridPaint);
+    canvas.drawLine(
+      Offset(center.dx - radarR, center.dy),
+      Offset(center.dx + radarR, center.dy),
+      gridPaint,
     );
-    canvas.drawCircle(
-      center,
-      GameConstants.zone2MaxRadius * scale,
-      Paint()
-        ..color = const Color(0x66FACC15)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
-    );
-    canvas.drawCircle(
-      center,
-      GameConstants.zone3MaxRadius * scale,
-      Paint()
-        ..color = const Color(0x66FB923C)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
-    );
-    canvas.drawCircle(
-      center,
-      radarR - 1.0,
-      Paint()
-        ..color = const Color(0xBBFF2E4C)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.8,
+    canvas.drawLine(
+      Offset(center.dx, center.dy - radarR),
+      Offset(center.dx, center.dy + radarR),
+      gridPaint,
     );
 
-    canvas.drawCircle(
-      center,
-      max(4.5, GameConstants.safeZoneRadius * scale),
-      Paint()..color = const Color(0x5500E5FF),
-    );
-    canvas.drawCircle(center, 2.3, Paint()..color = const Color(0xFF00E5FF));
-
-    for (final LootBoxComponent box in gameRef.lootBoxes) {
+    // Curved arcs of Sector boundaries & outer red border when within 4,500u radar view
+    if ((playerOriginDist - GameConstants.zone1MaxRadius).abs() <=
+        viewRadius + 250.0) {
       canvas.drawCircle(
-        Offset(
-          center.dx + box.position.x * scale,
-          center.dy + box.position.y * scale,
-        ),
-        box.kind == LootBoxKind.cargoBox ? 1.8 : 1.2,
+        baseCenter,
+        GameConstants.zone1MaxRadius * scale,
         Paint()
-          ..color = box.kind == LootBoxKind.cargoBox
-              ? const Color(0xFFFBBF24)
-              : const Color(0x99FACC15),
+          ..color = const Color(0x994ADE80)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4,
+      );
+    }
+    if ((playerOriginDist - GameConstants.zone2MaxRadius).abs() <=
+        viewRadius + 250.0) {
+      canvas.drawCircle(
+        baseCenter,
+        GameConstants.zone2MaxRadius * scale,
+        Paint()
+          ..color = const Color(0x99FACC15)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4,
+      );
+    }
+    if ((playerOriginDist - GameConstants.zone3MaxRadius).abs() <=
+        viewRadius + 250.0) {
+      canvas.drawCircle(
+        baseCenter,
+        GameConstants.zone3MaxRadius * scale,
+        Paint()
+          ..color = const Color(0x99FB923C)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4,
+      );
+    }
+    if ((playerOriginDist - GameConstants.mapRadius).abs() <=
+        viewRadius + 250.0) {
+      canvas.drawCircle(
+        baseCenter,
+        GameConstants.mapRadius * scale,
+        Paint()
+          ..color = const Color(0xEEFF2E4C)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4,
       );
     }
 
-    for (final AlienShipComponent alien in gameRef.aliens) {
-      final Offset aPos = Offset(
-        center.dx + alien.position.x * scale,
-        center.dy + alien.position.y * scale,
+    // Central Safe Zone Base (relative to player)
+    if (playerOriginDist <= viewRadius + GameConstants.safeZoneRadius + 120.0) {
+      final double safeR = GameConstants.safeZoneRadius * scale;
+      canvas.drawCircle(
+        baseCenter,
+        safeR,
+        Paint()..color = const Color(0x3800E5FF),
       );
+      canvas.drawCircle(
+        baseCenter,
+        safeR,
+        Paint()
+          ..color = const Color(0xDD00E5FF)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4,
+      );
+      canvas.drawCircle(baseCenter, 2.6, Paint()..color = Colors.white);
+    }
+
+    // Nearby Bonus & Cargo Boxes within 4,500u radius
+    const double boxCutoffSq = (viewRadius + 150.0) * (viewRadius + 150.0);
+    for (final LootBoxComponent box in gameRef.lootBoxes) {
+      final double dx = box.position.x - playerX;
+      final double dy = box.position.y - playerY;
+      if (dx * dx + dy * dy > boxCutoffSq) continue;
+      final bool isCargo = box.kind == LootBoxKind.cargoBox;
+      canvas.drawCircle(
+        Offset(center.dx + dx * scale, center.dy + dy * scale),
+        isCargo ? 2.6 : 1.9,
+        Paint()
+          ..color =
+              isCargo ? const Color(0xFFFBBF24) : const Color(0xCCFACC15),
+      );
+    }
+
+    // Nearby Normal & Pulsing BOSS Aliens within 4,500u radius
+    const double alienCutoffSq = (viewRadius + 260.0) * (viewRadius + 260.0);
+    for (final AlienShipComponent alien in gameRef.aliens) {
+      final double dx = alien.position.x - playerX;
+      final double dy = alien.position.y - playerY;
+      if (dx * dx + dy * dy > alienCutoffSq) continue;
+      final Offset aPos = Offset(center.dx + dx * scale, center.dy + dy * scale);
+      if (gameRef.lockedTarget == alien) {
+        canvas.drawCircle(
+          aPos,
+          alien.isBoss
+              ? alien.spec.minimapDotRadius + 6.0
+              : alien.spec.minimapDotRadius + 4.0,
+          Paint()
+            ..color = const Color(0xDDFF2E4C)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.4,
+        );
+      }
       if (alien.isBoss) {
         canvas.drawCircle(
           aPos,
-          alien.spec.minimapDotRadius + 2.5 + 1.3 * pulse,
+          alien.spec.minimapDotRadius + 3.8 + 1.8 * pulse,
           Paint()
-            ..color = const Color(0xFFFBBF24).withOpacity(0.28 + 0.35 * pulse),
+            ..color = const Color(0xFFFBBF24).withOpacity(0.28 + 0.40 * pulse),
         );
         canvas.drawCircle(
           aPos,
-          alien.spec.minimapDotRadius + 1.2,
+          alien.spec.minimapDotRadius + 1.9,
           Paint()..color = const Color(0xFFFF2E4C),
         );
         canvas.drawCircle(
           aPos,
-          alien.spec.minimapDotRadius * 0.65,
+          alien.spec.minimapDotRadius * 0.78,
           Paint()..color = const Color(0xFFFBBF24),
         );
       } else {
         canvas.drawCircle(
           aPos,
-          alien.spec.minimapDotRadius,
+          max(2.6, alien.spec.minimapDotRadius * 1.15),
           Paint()..color = alien.spec.primaryColor,
         );
       }
     }
 
-    final Offset p = Offset(
-      center.dx + gameRef.player.position.x * scale,
-      center.dy + gameRef.player.position.y * scale,
-    );
-
-    // Active Autopilot dashed trajectory & crosshair on small minimap
+    // Active Autopilot dashed trajectory line from center toward waypoint (or edge beacon if > 4,500u)
     final Vector2? ap = gameRef.autopilotTarget;
     if (ap != null) {
-      final Offset t = Offset(
-        center.dx + ap.x * scale,
-        center.dy + ap.y * scale,
-      );
-      final double dx = t.dx - p.dx;
-      final double dy = t.dy - p.dy;
-      final double dist = sqrt(dx * dx + dy * dy);
-      if (dist > 2.0) {
-        final double ux = dx / dist;
-        final double uy = dy / dist;
+      final double dx = ap.x - playerX;
+      final double dy = ap.y - playerY;
+      final double worldDist = sqrt(dx * dx + dy * dy);
+      if (worldDist > 1.0) {
+        final double ux = dx / worldDist;
+        final double uy = dy / worldDist;
+        final bool withinRadar = worldDist <= viewRadius;
+        final Offset endPt = withinRadar
+            ? Offset(center.dx + dx * scale, center.dy + dy * scale)
+            : Offset(
+                center.dx + ux * (radarR - 4.0),
+                center.dy + uy * (radarR - 4.0),
+              );
+        final double lineDist = (endPt - center).distance;
         final Paint dash = Paint()
-          ..color = const Color(0xAA00E5FF)
-          ..strokeWidth = 1.2;
+          ..color = const Color(0xCC00E5FF)
+          ..strokeWidth = 1.5;
         double d = 0.0;
-        while (d < dist) {
-          final double dEnd = min(dist, d + 4.0);
+        while (d < lineDist) {
+          final double dEnd = min(lineDist, d + 4.5);
           canvas.drawLine(
-            Offset(p.dx + ux * d, p.dy + uy * d),
-            Offset(p.dx + ux * dEnd, p.dy + uy * dEnd),
+            Offset(center.dx + ux * d, center.dy + uy * d),
+            Offset(center.dx + ux * dEnd, center.dy + uy * dEnd),
             dash,
           );
-          d += 8.0;
+          d += 8.5;
+        }
+        if (withinRadar) {
+          canvas.drawCircle(
+            endPt,
+            4.8 + 1.4 * pulse,
+            Paint()
+              ..color = const Color(0xFF00E5FF).withOpacity(0.5 + 0.45 * pulse)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.3,
+          );
+          canvas.drawCircle(endPt, 1.9, Paint()..color = Colors.white);
+        } else {
+          final Path beacon = Path()
+            ..moveTo(
+              center.dx + ux * (radarR - 1.5),
+              center.dy + uy * (radarR - 1.5),
+            )
+            ..lineTo(
+              center.dx + ux * (radarR - 8.0) - uy * 4.0,
+              center.dy + uy * (radarR - 8.0) + ux * 4.0,
+            )
+            ..lineTo(
+              center.dx + ux * (radarR - 8.0) + uy * 4.0,
+              center.dy + uy * (radarR - 8.0) - ux * 4.0,
+            )
+            ..close();
+          canvas.drawPath(
+            beacon,
+            Paint()
+              ..color =
+                  const Color(0xFF00E5FF).withOpacity(0.65 + 0.35 * pulse),
+          );
         }
       }
-      canvas.drawCircle(
-        t,
-        4.0,
-        Paint()
-          ..color = const Color(0xFF00E5FF).withOpacity(0.5 + 0.45 * pulse)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2,
-      );
-      canvas.drawCircle(t, 1.7, Paint()..color = const Color(0xFF00E5FF));
     }
 
+    // Crisp bright cyan/white directional arrow for player ship at exact center
+    final double a = gameRef.player.angle;
+    final double cA = cos(a);
+    final double sA = sin(a);
     canvas.drawCircle(
-      p,
-      3.8,
-      Paint()..color = gameRef.activeShipSpec.accentColor,
+      center,
+      11.5,
+      Paint()..color = const Color(0x4400E5FF),
+    );
+    final Path arrow = Path()
+      ..moveTo(center.dx + cA * 10.0, center.dy + sA * 10.0)
+      ..lineTo(
+        center.dx + (-cA * 6.2 - sA * 6.2),
+        center.dy + (-sA * 6.2 + cA * 6.2),
+      )
+      ..lineTo(center.dx - cA * 2.4, center.dy - sA * 2.4)
+      ..lineTo(
+        center.dx + (-cA * 6.2 + sA * 6.2),
+        center.dy + (-sA * 6.2 - cA * 6.2),
+      )
+      ..close();
+    canvas.drawPath(arrow, Paint()..color = const Color(0xFF00E5FF));
+    canvas.drawPath(
+      arrow,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+
+    canvas.restore();
+
+    // Crisp outer circular border
+    canvas.drawCircle(
+      center,
+      radarR - 1.0,
+      Paint()
+        ..color = const Color(0xCC00E5FF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.8,
     );
   }
 }

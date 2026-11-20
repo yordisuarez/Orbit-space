@@ -240,6 +240,15 @@ class SpaceGameEngine(
         equippedSectorChip = state.equippedSectorChipId?.let { byId[it] }
             ?.takeIf { it.type.category == EquipmentCategory.SECTOR_CHIP }
 
+        // Failsafe: ensure player always has at least 1x Chip Lv 1 if save has no chips equipped or in inventory
+        val hasAnyChip = equippedSectorChip != null ||
+            ownedItems.any { it.type.category == EquipmentCategory.SECTOR_CHIP }
+        if (!hasAnyChip) {
+            val fallbackChip = EquipmentItem(nextItemInstanceId++, EquipmentItemId.CHIP_1)
+            ownedItems.add(fallbackChip)
+            equippedSectorChip = fallbackChip
+        }
+
         currentMissionIndex = state.currentMissionIndex.coerceIn(0, MissionCatalog.all.size)
         val activeMission = MissionCatalog.all.getOrNull(currentMissionIndex)
         currentMissionProgress = if (activeMission != null) {
@@ -283,15 +292,18 @@ class SpaceGameEngine(
                 config2ShieldSlots[i] = null
             }
             nextItemInstanceId = 1
-            // Starter loadout: 1x LF-1 Laser and 1x SG-1 Shield on Interceptor
+            // Starter loadout: 1x LF-1 Laser, 1x SG-1 Shield, and 1x Chip Lv 1 equipped by default
             val starterLaser = EquipmentItem(nextItemInstanceId++, EquipmentItemId.LF_1)
             val starterShield = EquipmentItem(nextItemInstanceId++, EquipmentItemId.SG_1)
+            val starterChip = EquipmentItem(nextItemInstanceId++, EquipmentItemId.CHIP_1)
             ownedItems.add(starterLaser)
             ownedItems.add(starterShield)
+            ownedItems.add(starterChip)
             config1LaserSlots[0] = starterLaser
             config1ShieldSlots[0] = starterShield
             config2LaserSlots[0] = starterLaser
             config2ShieldSlots[0] = starterShield
+            equippedSectorChip = starterChip
         }
         recalculateShipStats(refillVitals = true)
 
@@ -1091,6 +1103,18 @@ class SpaceGameEngine(
         }
     }
 
+    // Temporary Developer / Testing Helpers
+    fun debugAddOneMillionCredits() {
+        credits += 1_000_000
+        requestSave()
+    }
+
+    fun debugAddOneLevel() {
+        val xpNeeded = (GameConfig.xpRequiredForLevel(player.level) - player.xp).coerceAtLeast(1)
+        addXp(xpNeeded)
+        requestSave()
+    }
+
     fun handleWorldTap(worldX: Float, worldY: Float): Boolean {
         if (!player.isAlive || isPaused || isHangarOpen) return false
         var bestAlien: AlienEntity? = null
@@ -1247,13 +1271,13 @@ class SpaceGameEngine(
             formationSwitchCooldown = max(0f, formationSwitchCooldown - dt)
         }
 
+        var movementAngle: Float? = null
         val mag = hypot(moveInputX, moveInputY)
         if (mag > GameConfig.JOYSTICK_DEADZONE) {
             // Instant manual override cancels autopilot
             autopilotTargetX = null
             autopilotTargetY = null
-            val targetAngle = atan2(moveInputY, moveInputX)
-            player.angleRad = lerpAngle(player.angleRad, targetAngle, 1f - exp(-GameConfig.PLAYER_TURN_SPEED * dt))
+            movementAngle = atan2(moveInputY, moveInputX)
             val dirX = moveInputX / mag
             val dirY = moveInputY / mag
             player.x += dirX * player.speed * dt
@@ -1271,8 +1295,7 @@ class SpaceGameEngine(
                 autopilotTargetY = null
                 player.isMoving = false
             } else {
-                val targetAngle = atan2(dy, dx)
-                player.angleRad = lerpAngle(player.angleRad, targetAngle, 1f - exp(-GameConfig.PLAYER_TURN_SPEED * dt))
+                movementAngle = atan2(dy, dx)
                 val stepDist = min(dist, player.speed * dt)
                 player.x += (dx / dist) * stepDist
                 player.y += (dy / dist) * stepDist
@@ -1281,11 +1304,20 @@ class SpaceGameEngine(
             }
         } else {
             player.isMoving = false
-            val locked = getLockedAlien()
-            if (player.isAutoFireEnabled && !player.inSafeZone && locked != null && isLockedTargetInRange()) {
-                val aimAngle = atan2(locked.y - player.y, locked.x - player.x)
-                player.angleRad = lerpAngle(player.angleRad, aimAngle, 1f - exp(-8f * dt))
-            }
+        }
+
+        // Combat Facing Override: decouple ship facing from movement velocity while attacking a locked alien
+        val locked = getLockedAlien()
+        val isActivelyAttacking = player.isAutoFireEnabled && !player.inSafeZone && locked != null
+        if (isActivelyAttacking && locked != null) {
+            val aimAngle = atan2(locked.y - player.y, locked.x - player.x)
+            player.angleRad = lerpAngle(player.angleRad, aimAngle, 1f - exp(-14f * dt))
+        } else if (movementAngle != null) {
+            player.angleRad = lerpAngle(
+                player.angleRad,
+                movementAngle,
+                1f - exp(-GameConfig.PLAYER_TURN_SPEED * dt)
+            )
         }
 
         val maxPlayerRadius = GameConfig.MAP_RADIUS - GameConfig.BORDER_PADDING

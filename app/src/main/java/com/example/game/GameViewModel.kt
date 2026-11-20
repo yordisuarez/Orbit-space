@@ -204,4 +204,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         engine.resetSector(keepProgress = false)
         _hudState.value = engine.buildHudSnapshot()
     }
+
+    fun debugAddOneMillionCredits() {
+        engine.debugAddOneMillionCredits()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun debugAddOneLevel() {
+        engine.debugAddOneLevel()
+        _hudState.value = engine.buildHudSnapshot()
+    }
 }
