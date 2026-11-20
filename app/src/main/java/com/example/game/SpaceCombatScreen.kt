@@ -82,10 +82,10 @@ fun SpaceCombatScreen(
     }
 
     BackHandler(enabled = hud.isAlive) {
-        if (hud.isHangarOpen) {
-            viewModel.closeHangar()
-        } else {
-            viewModel.togglePause()
+        when {
+            hud.isTacticalMapOpen -> viewModel.closeTacticalMap()
+            hud.isHangarOpen -> viewModel.closeHangar()
+            else -> viewModel.togglePause()
         }
     }
 
@@ -127,6 +127,8 @@ fun SpaceCombatScreen(
                 hud = hud,
                 onOpenHangar = { viewModel.openHangar() },
                 onToggleConfig = { viewModel.toggleConfig() },
+                onCycleFormation = { viewModel.cycleOwnedFormation() },
+                onCancelAutopilot = { viewModel.cancelAutopilot() },
                 onClaimMission = { viewModel.claimMissionReward() },
                 onTogglePause = { viewModel.togglePause() },
                 modifier = Modifier.align(Alignment.TopStart)
@@ -135,6 +137,7 @@ fun SpaceCombatScreen(
             TacticalMinimap(
                 engine = engine,
                 frameTick = frameTick,
+                onExpandMap = { viewModel.toggleTacticalMap() },
                 modifier = Modifier.align(Alignment.TopEnd)
             )
 
@@ -176,11 +179,21 @@ fun SpaceCombatScreen(
             }
         }
 
+        if (hud.isTacticalMapOpen && hud.isAlive && !hud.isHangarOpen && !hud.isPaused) {
+            ExpandableTacticalMapOverlay(
+                engine = engine,
+                frameTick = frameTick,
+                onSetAutopilot = { wx, wy -> viewModel.setAutopilotTarget(wx, wy) },
+                onClose = { viewModel.closeTacticalMap() }
+            )
+        }
+
         if (hud.isHangarOpen && hud.isAlive) {
             HangarShopOverlay(
                 hud = hud,
                 onSwitchConfig = { viewModel.switchConfig(it) },
                 onBuyOrSelectShipClass = { viewModel.buyOrSelectShipClass(it) },
+                onBuyOrSelectFormation = { viewModel.buyOrSelectFormation(it) },
                 onBuyEquipment = { viewModel.buyEquipment(it) },
                 onBuyFlaxVant = { viewModel.buyFlaxVant() },
                 onFuseItems = { viewModel.fuseItems(it) },

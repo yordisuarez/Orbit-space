@@ -80,6 +80,7 @@ fun HangarShopOverlay(
     hud: HudSnapshot,
     onSwitchConfig: (Int) -> Unit,
     onBuyOrSelectShipClass: (ShipClass) -> Unit,
+    onBuyOrSelectFormation: (DroneFormation) -> Unit,
     onBuyEquipment: (EquipmentItemId) -> Unit,
     onBuyFlaxVant: () -> Unit,
     onFuseItems: (EquipmentItemId) -> Unit,
@@ -302,6 +303,7 @@ fun HangarShopOverlay(
                         credits = hud.credits,
                         equipment = equipment,
                         onBuyOrSelectShipClass = onBuyOrSelectShipClass,
+                        onBuyOrSelectFormation = onBuyOrSelectFormation,
                         onBuyEquipment = onBuyEquipment,
                         onBuyFlaxVant = onBuyFlaxVant
                     )
@@ -891,7 +893,7 @@ private fun VantsTabContent(
                     softWrap = false
                 )
                 Text(
-                    text = "FLAX: ${equipment.flaxVantCount} • IRIS: ${equipment.irisVantCount} • CFG ${equipment.activeConfig}",
+                    text = "FLAX: ${equipment.flaxVantCount} • IRIS: ${equipment.irisVantCount} • CFG ${equipment.activeConfig} • ${equipment.activeFormation.displayName}",
                     style = MaterialTheme.typography.labelSmall,
                     color = AmberCredits,
                     maxLines = 1,
@@ -1189,6 +1191,7 @@ private fun ShopTabContent(
     credits: Int,
     equipment: EquipmentSnapshot,
     onBuyOrSelectShipClass: (ShipClass) -> Unit,
+    onBuyOrSelectFormation: (DroneFormation) -> Unit,
     onBuyEquipment: (EquipmentItemId) -> Unit,
     onBuyFlaxVant: () -> Unit
 ) {
@@ -1460,6 +1463,167 @@ private fun ShopTabContent(
                         )
                     }
                 }
+            }
+        }
+
+        // 3. Drone Formations Section (2 rows x 3 cards)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = stringResource(R.string.hangar_shop_formations),
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFF38BDF8),
+                maxLines = 1,
+                softWrap = false
+            )
+
+            val allFormations = DroneFormation.entries
+            val formationRows = allFormations.chunked(3)
+            formationRows.forEach { rowItems ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    rowItems.forEach { formation ->
+                        val isOwned = formation in equipment.ownedFormations
+                        val isActive = formation == equipment.activeFormation
+                        val canAct = (isOwned && !isActive) || (!isOwned && credits >= formation.cost)
+                        val accent = Color(formation.accentHex)
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isActive) accent.copy(alpha = 0.14f) else Color(0xFF071020))
+                                .border(
+                                    width = if (isActive) 1.6.dp else 1.dp,
+                                    color = if (isActive) accent else accent.copy(alpha = 0.45f),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .padding(9.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                FormationMiniPreview(formation = formation)
+                                Column {
+                                    Text(
+                                        text = formation.displayName,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = TacticalWhite,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                    Text(
+                                        text = if (formation.cost == 0) "DEFAULT" else "${"%,d".format(formation.cost)} CR",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = accent,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
+
+                            val bonusText = formation.bonuses.joinToString(", ")
+                            val penaltyText = formation.penalties.takeIf { it.isNotEmpty() }?.joinToString(", ")
+
+                            Text(
+                                text = bonusText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (formation == DroneFormation.NORMAL) TacticalMuted else EmeraldHull,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            if (penaltyText != null) {
+                                Text(
+                                    text = penaltyText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = CrimsonDanger,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            } else {
+                                Text(
+                                    text = "No penalties",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TacticalMuted,
+                                    maxLines = 1
+                                )
+                            }
+
+                            Button(
+                                onClick = { onBuyOrSelectFormation(formation) },
+                                enabled = canAct,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isOwned) CyanLaser else accent,
+                                    contentColor = SpaceVoid,
+                                    disabledContainerColor = if (isActive) EmeraldHull.copy(alpha = 0.25f) else Color(0xFF1A2438),
+                                    disabledContentColor = if (isActive) EmeraldHull else TacticalMuted
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(34.dp)
+                                    .testTag("shop_formation_${formation.name.lowercase()}")
+                            ) {
+                                val btnLabel = when {
+                                    isActive -> stringResource(R.string.hangar_active)
+                                    isOwned -> stringResource(R.string.hangar_equip)
+                                    else -> "${stringResource(R.string.hangar_buy)} ${"%,d".format(formation.cost)} CR"
+                                }
+                                Text(
+                                    text = btnLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FormationMiniPreview(formation: DroneFormation) {
+    val accent = Color(formation.accentHex)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(34.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF040914))
+            .border(1.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+    ) {
+        Canvas(modifier = Modifier.size(28.dp)) {
+            val cx = size.width * 0.5f
+            val cy = size.height * 0.5f
+            // Center ship marker
+            drawCircle(
+                color = Color.White.copy(alpha = 0.7f),
+                radius = 2.4f,
+                center = androidx.compose.ui.geometry.Offset(cx, cy)
+            )
+            val previewScale = 0.145f
+            for (i in 0 until 8) {
+                val (localX, localY, _) = formation.computeLocalSlot(
+                    index = i,
+                    total = 8,
+                    hullRadius = 26f,
+                    elapsedTime = 0.3f
+                )
+                // Rotate -90 deg so ship nose points UP in the mini icon
+                val px = cx + localY * previewScale
+                val py = cy - localX * previewScale
+                drawCircle(
+                    color = accent,
+                    radius = 1.9f,
+                    center = androidx.compose.ui.geometry.Offset(px, py)
+                )
             }
         }
     }

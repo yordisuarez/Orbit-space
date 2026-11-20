@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'game/dark_orbit_game.dart';
 import 'ui/hangar_overlay.dart';
+import 'ui/tactical_map_overlay.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +36,10 @@ class DarkOrbitApp extends StatelessWidget {
             DarkOrbitGame.hangarOverlayId:
                 (BuildContext context, DarkOrbitGame game) {
               return HangarOverlay(game: game);
+            },
+            DarkOrbitGame.tacticalMapOverlayId:
+                (BuildContext context, DarkOrbitGame game) {
+              return TacticalMapOverlay(game: game);
             },
           },
         ),

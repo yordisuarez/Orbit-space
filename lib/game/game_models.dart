@@ -2,12 +2,12 @@ import 'dart:math';
 import 'dart:ui';
 
 class GameConstants {
-  static const double mapRadius = 8000.0;
-  static const double safeZoneRadius = 400.0;
-  static const double zone1MaxRadius = 2000.0;
-  static const double zone2MaxRadius = 4000.0;
-  static const double zone3MaxRadius = 6000.0;
-  static const double zone4MaxRadius = 8000.0;
+  static const double mapRadius = 20000.0;
+  static const double safeZoneRadius = 600.0;
+  static const double zone1MaxRadius = 5000.0;
+  static const double zone2MaxRadius = 10000.0;
+  static const double zone3MaxRadius = 15000.0;
+  static const double zone4MaxRadius = 20000.0;
 
   static const double borderPadding = 30.0;
   static const double radiationTickInterval = 0.65;
@@ -18,12 +18,23 @@ class GameConstants {
 
   static const int maxVants = 8;
   static const int flaxVantCost = 600;
+  static const double formationSwitchCooldownSec = 3.0;
+  static const double diamondShieldRegenPercentPerSec = 0.015;
 
   static const double sectorBaseAlienHp = 120.0;
   static const double sectorBaseAlienDamage = 10.0;
   static const double sectorBaseAlienCredits = 100.0;
   static const double sectorBaseAlienXp = 25.0;
   static const double sectorScalingBase = 2.5;
+
+  static const double bossSpawnChance = 0.20;
+  static const double bossHpMultiplier = 4.0;
+  static const double bossDamageMultiplier = 2.0;
+  static const int bossRewardMultiplier = 4;
+  static const double bossSizeMultiplier = 1.5;
+
+  static const double autopilotStopRadius = 60.0;
+  static const double autopilotMaxTargetRadius = 19800.0;
 
   static const double playerAttackRange = 520.0;
   static const double playerFireInterval = 0.24;
@@ -42,11 +53,11 @@ class GameConstants {
   static const double safeZoneHpRegenRate = 64.0;
   static const double safeZoneShieldRegenRate = 130.0;
 
-  static const int bonusBoxCount = 45;
+  static const int bonusBoxCount = 120;
   static const double lootCollectRadius = 42.0;
   static const double cargoLifetimeSec = 50.0;
 
-  static const int starCount = 1200;
+  static const int starCount = 3000;
 
   static int xpRequiredForLevel(int level) {
     final int lv = level < 1 ? 1 : level;
@@ -287,7 +298,7 @@ class AlienTierCatalog {
       callsign: 'SCOUT',
       minRadius: GameConstants.safeZoneRadius,
       maxRadius: GameConstants.zone1MaxRadius,
-      activeCount: 10,
+      activeCount: 22,
       radius: 17.0,
       patrolSpeed: 118.0,
       chaseSpeed: 190.0,
@@ -304,7 +315,7 @@ class AlienTierCatalog {
       callsign: 'HUNTER',
       minRadius: GameConstants.zone1MaxRadius,
       maxRadius: GameConstants.zone2MaxRadius,
-      activeCount: 12,
+      activeCount: 24,
       radius: 22.0,
       patrolSpeed: 96.0,
       chaseSpeed: 160.0,
@@ -321,7 +332,7 @@ class AlienTierCatalog {
       callsign: 'DESTROYER',
       minRadius: GameConstants.zone2MaxRadius,
       maxRadius: GameConstants.zone3MaxRadius,
-      activeCount: 10,
+      activeCount: 20,
       radius: 28.0,
       patrolSpeed: 80.0,
       chaseSpeed: 135.0,
@@ -338,7 +349,7 @@ class AlienTierCatalog {
       callsign: 'DREADNOUGHT',
       minRadius: GameConstants.zone3MaxRadius,
       maxRadius: GameConstants.zone4MaxRadius,
-      activeCount: 6,
+      activeCount: 14,
       radius: 40.0,
       patrolSpeed: 62.0,
       chaseSpeed: 110.0,
@@ -427,10 +438,268 @@ class VantDrone {
   final List<EquipmentItem?> config1Slots;
   final List<EquipmentItem?> config2Slots;
 
+  // Smoothly interpolated world-space coordinates for Drone Formations
+  double worldX = 0.0;
+  double worldY = 0.0;
+  double facingRad = 0.0;
+  bool hasInitializedPosition = false;
+
   VantTierSpec get spec => VantTierCatalog.of(tier);
 
   List<EquipmentItem?> slotsForConfig(int configNumber) =>
       configNumber == 2 ? config2Slots : config1Slots;
+}
+
+enum DroneFormation {
+  normal,
+  drill,
+  heart,
+  diamond,
+  ring,
+  wheel,
+}
+
+class DroneFormationSlot {
+  const DroneFormationSlot({
+    required this.localX,
+    required this.localY,
+    required this.extraRotation,
+  });
+
+  final double localX;
+  final double localY;
+  final double extraRotation;
+}
+
+class DroneFormationSpec {
+  const DroneFormationSpec({
+    required this.formation,
+    required this.displayName,
+    required this.shortCode,
+    required this.cost,
+    required this.damageMult,
+    required this.shieldMult,
+    required this.hullMult,
+    required this.speedMult,
+    required this.combatShieldRegenPct,
+    required this.accentColor,
+    required this.bonusLabel,
+    this.penaltyLabel,
+  });
+
+  final DroneFormation formation;
+  final String displayName;
+  final String shortCode;
+  final int cost;
+  final double damageMult;
+  final double shieldMult;
+  final double hullMult;
+  final double speedMult;
+  final double combatShieldRegenPct;
+  final Color accentColor;
+  final String bonusLabel;
+  final String? penaltyLabel;
+}
+
+class DroneFormationCatalog {
+  static const Map<DroneFormation, DroneFormationSpec> specs =
+      <DroneFormation, DroneFormationSpec>{
+    DroneFormation.normal: DroneFormationSpec(
+      formation: DroneFormation.normal,
+      displayName: 'NORMAL',
+      shortCode: 'NORM',
+      cost: 0,
+      damageMult: 1.0,
+      shieldMult: 1.0,
+      hullMult: 1.0,
+      speedMult: 1.0,
+      combatShieldRegenPct: 0.0,
+      accentColor: Color(0xFF94A3B8),
+      bonusLabel: 'Balanced flanking formation',
+    ),
+    DroneFormation.drill: DroneFormationSpec(
+      formation: DroneFormation.drill,
+      displayName: 'DRILL',
+      shortCode: 'DRIL',
+      cost: 1000,
+      damageMult: 1.20,
+      shieldMult: 0.75,
+      hullMult: 1.0,
+      speedMult: 0.95,
+      combatShieldRegenPct: 0.0,
+      accentColor: Color(0xFFFF5252),
+      bonusLabel: '+20% Laser DMG',
+      penaltyLabel: '-25% Max SHD, -5% SPD',
+    ),
+    DroneFormation.heart: DroneFormationSpec(
+      formation: DroneFormation.heart,
+      displayName: 'HEART',
+      shortCode: 'HART',
+      cost: 1200,
+      damageMult: 0.95,
+      shieldMult: 1.20,
+      hullMult: 1.20,
+      speedMult: 1.0,
+      combatShieldRegenPct: 0.0,
+      accentColor: Color(0xFFF472B6),
+      bonusLabel: '+20% Max Hull, +20% Max SHD',
+      penaltyLabel: '-5% Laser DMG',
+    ),
+    DroneFormation.diamond: DroneFormationSpec(
+      formation: DroneFormation.diamond,
+      displayName: 'DIAMOND',
+      shortCode: 'DIAM',
+      cost: 1500,
+      damageMult: 1.0,
+      shieldMult: 1.0,
+      hullMult: 0.70,
+      speedMult: 1.0,
+      combatShieldRegenPct: GameConstants.diamondShieldRegenPercentPerSec,
+      accentColor: Color(0xFF38BDF8),
+      bonusLabel: '+1.5% Max SHD/s Regen',
+      penaltyLabel: '-30% Max Hull',
+    ),
+    DroneFormation.ring: DroneFormationSpec(
+      formation: DroneFormation.ring,
+      displayName: 'RING',
+      shortCode: 'RING',
+      cost: 1800,
+      damageMult: 0.75,
+      shieldMult: 1.85,
+      hullMult: 1.0,
+      speedMult: 0.95,
+      combatShieldRegenPct: 0.0,
+      accentColor: Color(0xFFFBBF24),
+      bonusLabel: '+85% Max Shield',
+      penaltyLabel: '-25% Laser DMG, -5% SPD',
+    ),
+    DroneFormation.wheel: DroneFormationSpec(
+      formation: DroneFormation.wheel,
+      displayName: 'WHEEL',
+      shortCode: 'WHEL',
+      cost: 1200,
+      damageMult: 0.80,
+      shieldMult: 1.0,
+      hullMult: 1.0,
+      speedMult: 1.15,
+      combatShieldRegenPct: 0.0,
+      accentColor: Color(0xFF34D399),
+      bonusLabel: '+15% Speed',
+      penaltyLabel: '-20% Laser DMG',
+    ),
+  };
+
+  static DroneFormationSpec of(DroneFormation formation) => specs[formation]!;
+
+  /// Computes ship-local offset (+X forward, +Y starboard) for drone [index] of [total].
+  static DroneFormationSlot computeLocalSlot({
+    required DroneFormation formation,
+    required int index,
+    required int total,
+    required double shipHullRadius,
+    required double elapsedTime,
+  }) {
+    final int safeTotal = max(1, total);
+    final double baseR = shipHullRadius + 28.0;
+    final double bob = sin(elapsedTime * 3.0 + index * 0.9) * 2.2;
+
+    switch (formation) {
+      case DroneFormation.normal:
+        const List<List<double>> offsets = <List<double>>[
+          <double>[-0.35, -1.10],
+          <double>[-0.35, 1.10],
+          <double>[-0.95, -1.45],
+          <double>[-0.95, 1.45],
+          <double>[-1.40, -0.78],
+          <double>[-1.40, 0.78],
+          <double>[-1.65, -0.26],
+          <double>[-1.65, 0.26],
+        ];
+        final List<double> slot = offsets[index % offsets.length];
+        return DroneFormationSlot(
+          localX: slot[0] * baseR + bob,
+          localY: slot[1] * baseR,
+          extraRotation: 0.0,
+        );
+
+      case DroneFormation.drill:
+        const List<List<double>> offsets = <List<double>>[
+          <double>[1.65, 0.0],
+          <double>[1.15, -0.52],
+          <double>[1.15, 0.52],
+          <double>[0.58, -1.00],
+          <double>[0.58, 1.00],
+          <double>[0.0, -1.46],
+          <double>[0.0, 1.46],
+          <double>[-0.65, 0.0],
+        ];
+        final List<double> slot = offsets[index % offsets.length];
+        return DroneFormationSlot(
+          localX: slot[0] * baseR + bob * 0.6,
+          localY: slot[1] * baseR,
+          extraRotation: 0.0,
+        );
+
+      case DroneFormation.heart:
+        final double t = (index / safeTotal) * 2.0 * pi;
+        final double hx = 16.0 * pow(sin(t), 3).toDouble();
+        final double hy = 13.0 * cos(t) -
+            5.0 * cos(2.0 * t) -
+            2.0 * cos(3.0 * t) -
+            cos(4.0 * t);
+        final double scale = (baseR * 1.42) / 16.0;
+        return DroneFormationSlot(
+          localX: hy * scale + bob * 0.5,
+          localY: hx * scale,
+          extraRotation: 0.0,
+        );
+
+      case DroneFormation.diamond:
+        final double p = (index / safeTotal) * 4.0;
+        final double rad = baseR * 1.38;
+        double lx;
+        double ly;
+        if (p < 1.0) {
+          lx = rad * (1.0 - p);
+          ly = rad * p;
+        } else if (p < 2.0) {
+          final double f = p - 1.0;
+          lx = -rad * f;
+          ly = rad * (1.0 - f);
+        } else if (p < 3.0) {
+          final double f = p - 2.0;
+          lx = -rad * (1.0 - f);
+          ly = -rad * f;
+        } else {
+          final double f = p - 3.0;
+          lx = rad * f;
+          ly = -rad * (1.0 - f);
+        }
+        return DroneFormationSlot(
+          localX: lx,
+          localY: ly,
+          extraRotation: 0.0,
+        );
+
+      case DroneFormation.ring:
+        final double r = baseR * 1.08;
+        final double theta = elapsedTime * 1.7 + (index * (2.0 * pi / safeTotal));
+        return DroneFormationSlot(
+          localX: cos(theta) * r,
+          localY: sin(theta) * r,
+          extraRotation: theta + pi * 0.5,
+        );
+
+      case DroneFormation.wheel:
+        final double r = baseR * 1.32;
+        final double spin = elapsedTime * 3.4 + (index * (2.0 * pi / safeTotal));
+        return DroneFormationSlot(
+          localX: cos(spin) * r,
+          localY: sin(spin) * r,
+          extraRotation: spin + pi * 0.5,
+        );
+    }
+  }
 }
 
 enum EquipmentCategory {

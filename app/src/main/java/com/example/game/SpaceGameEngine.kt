@@ -51,6 +51,21 @@ class SpaceGameEngine(
         private set
     val ownedVants: MutableList<VantDrone> = mutableListOf()
 
+    // Classic DarkOrbit Drone Formations
+    val ownedFormations: MutableSet<DroneFormation> = mutableSetOf(DroneFormation.NORMAL)
+    var activeFormation: DroneFormation = DroneFormation.NORMAL
+        private set
+    var formationSwitchCooldown: Float = 0f
+        private set
+
+    // Interactive Tactical Map & Tap-to-Fly Autopilot
+    var isTacticalMapOpen: Boolean = false
+        private set
+    var autopilotTargetX: Float? = null
+        private set
+    var autopilotTargetY: Float? = null
+        private set
+
     // Sequential Mission Chain State
     var currentMissionIndex: Int = 0
         private set
@@ -134,6 +149,8 @@ class SpaceGameEngine(
                     config2SlotIds = vant.config2Slots.map { it?.instanceId }
                 )
             },
+            ownedFormations = ownedFormations.toSet(),
+            activeFormation = activeFormation,
             equippedSectorChipId = equippedSectorChip?.instanceId,
             currentMissionIndex = currentMissionIndex,
             currentMissionProgress = currentMissionProgress
@@ -210,6 +227,16 @@ class SpaceGameEngine(
             (ownedVants.maxOfOrNull { it.id } ?: 0) + 1
         )
 
+        ownedFormations.clear()
+        ownedFormations.add(DroneFormation.NORMAL)
+        ownedFormations.addAll(state.ownedFormations)
+        activeFormation = if (state.activeFormation in ownedFormations) {
+            state.activeFormation
+        } else {
+            DroneFormation.NORMAL
+        }
+        formationSwitchCooldown = 0f
+
         equippedSectorChip = state.equippedSectorChipId?.let { byId[it] }
             ?.takeIf { it.type.category == EquipmentCategory.SECTOR_CHIP }
 
@@ -222,6 +249,7 @@ class SpaceGameEngine(
         }
 
         recalculateShipStats(refillVitals = true)
+        snapVantsToFormation()
     }
 
     fun resetSector(keepProgress: Boolean, triggerSave: Boolean = true) {
@@ -238,6 +266,10 @@ class SpaceGameEngine(
             equippedSectorChip = null
             ownedVants.clear()
             nextVantId = 1
+            ownedFormations.clear()
+            ownedFormations.add(DroneFormation.NORMAL)
+            activeFormation = DroneFormation.NORMAL
+            formationSwitchCooldown = 0f
             currentMissionIndex = 0
             currentMissionProgress = 0
             ownedItems.clear()
@@ -287,6 +319,10 @@ class SpaceGameEngine(
         lockedAlienId = null
         isPaused = false
         isHangarOpen = false
+        isTacticalMapOpen = false
+        autopilotTargetX = null
+        autopilotTargetY = null
+        snapVantsToFormation()
 
         lasers.clear()
         rockets.clear()
@@ -328,6 +364,10 @@ class SpaceGameEngine(
         player.timeSinceDamaged = GameConfig.SHIELD_REGEN_DELAY
         cameraX = player.x
         cameraY = player.y
+        autopilotTargetX = null
+        autopilotTargetY = null
+        isTacticalMapOpen = false
+        snapVantsToFormation()
         lasers.clear()
         rockets.clear()
         aliens.forEach { alien ->
@@ -340,6 +380,10 @@ class SpaceGameEngine(
     fun setMoveJoystick(x: Float, y: Float) {
         moveInputX = x
         moveInputY = y
+        if (hypot(x, y) > GameConfig.JOYSTICK_DEADZONE) {
+            autopilotTargetX = null
+            autopilotTargetY = null
+        }
     }
 
     fun setAimJoystick(x: Float, y: Float) {
@@ -414,6 +458,7 @@ class SpaceGameEngine(
 
     fun openHangar() {
         if (!player.isAlive) return
+        isTacticalMapOpen = false
         isHangarOpen = true
         isPaused = true
     }
@@ -423,6 +468,45 @@ class SpaceGameEngine(
         isPaused = false
         recalculateShipStats(refillVitals = false)
         requestSave()
+    }
+
+    fun openTacticalMap() {
+        if (!player.isAlive || isHangarOpen || isPaused) return
+        isTacticalMapOpen = true
+    }
+
+    fun closeTacticalMap() {
+        isTacticalMapOpen = false
+    }
+
+    fun toggleTacticalMap() {
+        if (isTacticalMapOpen) {
+            closeTacticalMap()
+        } else {
+            openTacticalMap()
+        }
+    }
+
+    fun setAutopilotTarget(worldX: Float, worldY: Float) {
+        if (!player.isAlive) return
+        val dist = hypot(worldX, worldY)
+        val clampedX: Float
+        val clampedY: Float
+        if (dist > GameConfig.AUTOPILOT_MAX_TARGET_RADIUS && dist > 0.001f) {
+            val scale = GameConfig.AUTOPILOT_MAX_TARGET_RADIUS / dist
+            clampedX = worldX * scale
+            clampedY = worldY * scale
+        } else {
+            clampedX = worldX
+            clampedY = worldY
+        }
+        autopilotTargetX = clampedX
+        autopilotTargetY = clampedY
+    }
+
+    fun cancelAutopilot() {
+        autopilotTargetX = null
+        autopilotTargetY = null
     }
 
     fun switchConfig(configNumber: Int): Boolean {
@@ -436,6 +520,51 @@ class SpaceGameEngine(
 
     fun toggleConfig(): Boolean {
         return switchConfig(if (activeConfig == 1) 2 else 1)
+    }
+
+    // -------------------------------------------------------------------------
+    // Drone Formations (Shop purchase, equip, and mid-flight 3s cooldown cycle)
+    // -------------------------------------------------------------------------
+    fun buyOrSelectFormation(formation: DroneFormation): Boolean {
+        if (formation in ownedFormations) {
+            if (activeFormation == formation) return false
+            activeFormation = formation
+            recalculateShipStats(refillVitals = false)
+            requestSave()
+            return true
+        }
+        if (credits < formation.cost) return false
+        credits -= formation.cost
+        ownedFormations.add(formation)
+        activeFormation = formation
+        recalculateShipStats(refillVitals = false)
+        requestSave()
+        return true
+    }
+
+    fun cycleOwnedFormation(): Boolean {
+        if (!player.isAlive || isPaused || isHangarOpen) return false
+        if (formationSwitchCooldown > 0.05f) return false
+        val ordered = DroneFormation.entries.filter { it in ownedFormations }
+        if (ordered.size <= 1) return false
+        val currentIdx = ordered.indexOf(activeFormation).coerceAtLeast(0)
+        val next = ordered[(currentIdx + 1) % ordered.size]
+        activeFormation = next
+        formationSwitchCooldown = GameConfig.FORMATION_SWITCH_COOLDOWN_SEC
+        recalculateShipStats(refillVitals = false)
+        popups.add(
+            FloatingPopup(
+                x = player.x,
+                y = player.y - activeShipClass.hullRadius - 36f,
+                text = "${next.displayName.uppercase()} FORMATION",
+                life = 1.25f,
+                maxLife = 1.25f,
+                colorRgb = (next.accentHex and 0xFFFFFF).toInt(),
+                textSize = 14.5f
+            )
+        )
+        requestSave()
+        return true
     }
 
     // -------------------------------------------------------------------------
@@ -818,19 +947,24 @@ class SpaceGameEngine(
             }
         }
 
+        val rawLaserDamage = GameConfig.PLAYER_BASE_LASER_DAMAGE + bonusDamage
+        val rawMaxShield = GameConfig.PLAYER_BASE_MAX_SHIELD + bonusShield
+        val rawSpeed = activeShipClass.speed
+        val rawMaxHull = activeShipClass.baseHull + (player.level - 1) * GameConfig.PLAYER_HP_PER_LEVEL
+
+        val f = activeFormation
         player.shipClass = activeShipClass
-        player.laserDamage = GameConfig.PLAYER_BASE_LASER_DAMAGE + bonusDamage
-        player.maxShield = GameConfig.PLAYER_BASE_MAX_SHIELD + bonusShield
-        // Ship speed is strictly determined by the equipped Ship Class (no Speed Engines)
-        player.speed = activeShipClass.speed
-        player.maxHp = activeShipClass.baseHull + (player.level - 1) * GameConfig.PLAYER_HP_PER_LEVEL
+        player.laserDamage = rawLaserDamage * f.laserMultiplier
+        player.maxShield = rawMaxShield * f.shieldMultiplier
+        player.speed = rawSpeed * f.speedMultiplier
+        player.maxHp = rawMaxHull * f.hullMultiplier
 
         if (refillVitals) {
             player.hp = player.maxHp
             player.shield = player.maxShield
         } else {
             if (shieldDeltaAdded > 0f && player.inSafeZone) {
-                player.shield = min(player.maxShield, player.shield + shieldDeltaAdded)
+                player.shield = min(player.maxShield, player.shield + shieldDeltaAdded * f.shieldMultiplier)
             }
             player.hp = player.hp.coerceIn(0f, player.maxHp)
             player.shield = player.shield.coerceIn(0f, player.maxShield)
@@ -1041,6 +1175,13 @@ class SpaceGameEngine(
             playerXpToNext = GameConfig.xpRequiredForLevel(player.level),
             activeConfig = activeConfig,
             activeShipClass = activeShipClass,
+            activeFormation = activeFormation,
+            formationCooldownRemaining = formationSwitchCooldown,
+            ownedFormationCount = ownedFormations.size,
+            isAutopilotActive = autopilotTargetX != null && autopilotTargetY != null,
+            autopilotTargetX = autopilotTargetX?.toInt() ?: 0,
+            autopilotTargetY = autopilotTargetY?.toInt() ?: 0,
+            isTacticalMapOpen = isTacticalMapOpen,
             playerHp = player.hp.toInt().coerceAtLeast(0),
             playerMaxHp = player.maxHp.toInt(),
             playerShield = player.shield.toInt().coerceAtLeast(0),
@@ -1077,6 +1218,8 @@ class SpaceGameEngine(
                 },
                 flaxVantCount = flaxCount,
                 irisVantCount = irisCount,
+                ownedFormations = ownedFormations.toSet(),
+                activeFormation = activeFormation,
                 inventory = getAvailableInventory(),
                 ownedItemCounts = counts,
                 hasAnyReadyFusion = hasFusion,
@@ -1100,9 +1243,15 @@ class SpaceGameEngine(
         if (player.rocketCooldown > 0f) {
             player.rocketCooldown = max(0f, player.rocketCooldown - dt)
         }
+        if (formationSwitchCooldown > 0f) {
+            formationSwitchCooldown = max(0f, formationSwitchCooldown - dt)
+        }
 
         val mag = hypot(moveInputX, moveInputY)
         if (mag > GameConfig.JOYSTICK_DEADZONE) {
+            // Instant manual override cancels autopilot
+            autopilotTargetX = null
+            autopilotTargetY = null
             val targetAngle = atan2(moveInputY, moveInputX)
             player.angleRad = lerpAngle(player.angleRad, targetAngle, 1f - exp(-GameConfig.PLAYER_TURN_SPEED * dt))
             val dirX = moveInputX / mag
@@ -1111,6 +1260,25 @@ class SpaceGameEngine(
             player.y += dirY * player.speed * dt
             player.isMoving = true
             player.thrusterPulse += dt * 18f
+        } else if (autopilotTargetX != null && autopilotTargetY != null) {
+            val tx = autopilotTargetX!!
+            val ty = autopilotTargetY!!
+            val dx = tx - player.x
+            val dy = ty - player.y
+            val dist = hypot(dx, dy)
+            if (dist <= GameConfig.AUTOPILOT_STOP_RADIUS) {
+                autopilotTargetX = null
+                autopilotTargetY = null
+                player.isMoving = false
+            } else {
+                val targetAngle = atan2(dy, dx)
+                player.angleRad = lerpAngle(player.angleRad, targetAngle, 1f - exp(-GameConfig.PLAYER_TURN_SPEED * dt))
+                val stepDist = min(dist, player.speed * dt)
+                player.x += (dx / dist) * stepDist
+                player.y += (dy / dist) * stepDist
+                player.isMoving = true
+                player.thrusterPulse += dt * 18f
+            }
         } else {
             player.isMoving = false
             val locked = getLockedAlien()
@@ -1170,9 +1338,58 @@ class SpaceGameEngine(
             if (player.shield < player.maxShield) {
                 player.shield = min(player.maxShield, player.shield + GameConfig.SAFE_ZONE_SHIELD_REGEN_RATE * dt)
             }
-        } else if (player.timeSinceDamaged >= GameConfig.SHIELD_REGEN_DELAY) {
-            if (player.shield < player.maxShield) {
+        } else {
+            // DIAMOND formation passive continuous combat shield regen (+1.5% Max Shield/sec even during combat)
+            val formationRegenPct = activeFormation.passiveShieldRegenPctPerSec
+            if (formationRegenPct > 0f && player.shield < player.maxShield) {
+                player.shield = min(player.maxShield, player.shield + player.maxShield * formationRegenPct * dt)
+            }
+            if (player.timeSinceDamaged >= GameConfig.SHIELD_REGEN_DELAY && player.shield < player.maxShield) {
                 player.shield = min(player.maxShield, player.shield + GameConfig.SHIELD_REGEN_RATE * dt)
+            }
+        }
+
+        updateVantFormationPositions(dt)
+    }
+
+    private fun snapVantsToFormation() {
+        val count = ownedVants.size
+        if (count == 0) return
+        val cosA = cos(player.angleRad)
+        val sinA = sin(player.angleRad)
+        val hullR = activeShipClass.hullRadius
+        for (i in 0 until count) {
+            val vant = ownedVants[i]
+            val (lx, ly, extraRot) = activeFormation.computeLocalSlot(i, count, hullR, elapsedTime)
+            vant.worldX = player.x + lx * cosA - ly * sinA
+            vant.worldY = player.y + lx * sinA + ly * cosA
+            vant.facingRad = player.angleRad + extraRot
+            vant.hasInitializedPosition = true
+        }
+    }
+
+    private fun updateVantFormationPositions(dt: Float) {
+        val count = ownedVants.size
+        if (count == 0) return
+        val cosA = cos(player.angleRad)
+        val sinA = sin(player.angleRad)
+        val hullR = activeShipClass.hullRadius
+        val lerpFactor = 1f - exp(-9.5f * dt)
+        for (i in 0 until count) {
+            val vant = ownedVants[i]
+            val (lx, ly, extraRot) = activeFormation.computeLocalSlot(i, count, hullR, elapsedTime)
+            val targetX = player.x + lx * cosA - ly * sinA
+            val targetY = player.y + lx * sinA + ly * cosA
+            val targetFacing = player.angleRad + extraRot
+            if (!vant.hasInitializedPosition) {
+                vant.worldX = targetX
+                vant.worldY = targetY
+                vant.facingRad = targetFacing
+                vant.hasInitializedPosition = true
+            } else {
+                vant.worldX += (targetX - vant.worldX) * lerpFactor
+                vant.worldY += (targetY - vant.worldY) * lerpFactor
+                vant.facingRad = lerpAngle(vant.facingRad, targetFacing, lerpFactor)
             }
         }
     }
@@ -1359,8 +1576,8 @@ class SpaceGameEngine(
                             angleRad = angleToPlayer,
                             fromPlayer = false,
                             targetAlienId = null,
-                            damage = tier.laserDamage,
-                            colorHex = tier.primaryColorHex,
+                            damage = alien.laserDamage,
+                            colorHex = if (alien.isBoss) 0xFFFF2E4C else tier.primaryColorHex,
                             lifeRemaining = 1.15f
                         )
                     )
@@ -1607,6 +1824,9 @@ class SpaceGameEngine(
             player.shield = 0f
             player.isAlive = false
             player.isAutoFireEnabled = false
+            autopilotTargetX = null
+            autopilotTargetY = null
+            isTacticalMapOpen = false
             spawnExplosion(player.x, player.y, primaryHex = activeShipClass.accentColorHex, accentHex = 0xFF38BDF8, isBoss = false)
             screenShake = 14f
         }
@@ -1615,10 +1835,11 @@ class SpaceGameEngine(
     private fun onAlienDestroyed(alien: AlienEntity) {
         val tier = alien.tier
         aliens.remove(alien)
-        credits += tier.rewardCredits
+        credits += alien.rewardCredits
         kills += 1
-        addXp(tier.rewardXp)
+        addXp(alien.rewardXp)
 
+        // Boss kills also count toward their Sector's normal alien mission objectives
         when (tier) {
             AlienTier.SCOUT -> recordMissionProgress(MissionGoalType.DESTROY_SCOUTS)
             AlienTier.HUNTER -> recordMissionProgress(MissionGoalType.DESTROY_HUNTERS)
@@ -1626,30 +1847,35 @@ class SpaceGameEngine(
             AlienTier.DREADNOUGHT_BOSS -> Unit
         }
 
-        val isBoss = tier == AlienTier.DREADNOUGHT_BOSS
-        screenShake = max(screenShake, if (isBoss) 14f else 7.5f)
+        val isBigBoss = alien.isBoss || tier == AlienTier.DREADNOUGHT_BOSS
+        screenShake = max(screenShake, if (isBigBoss) 14f else 7.5f)
 
         spawnExplosion(
             x = alien.x,
             y = alien.y,
-            primaryHex = tier.primaryColorHex,
-            accentHex = tier.accentColorHex,
-            isBoss = isBoss
+            primaryHex = if (alien.isBoss) 0xFFFBBF24 else tier.primaryColorHex,
+            accentHex = if (alien.isBoss) 0xFFFF2E4C else tier.accentColorHex,
+            isBoss = isBigBoss
         )
 
         popups.add(
             FloatingPopup(
                 x = alien.x,
                 y = alien.y - alien.radius - 14f,
-                text = "+${tier.rewardCredits} CR  +${tier.rewardXp} XP",
-                life = 1.25f,
-                maxLife = 1.25f,
+                text = if (alien.isBoss) {
+                    "BOSS! +${alien.rewardCredits} CR  +${alien.rewardXp} XP"
+                } else {
+                    "+${alien.rewardCredits} CR  +${alien.rewardXp} XP"
+                },
+                life = if (alien.isBoss) 1.55f else 1.25f,
+                maxLife = if (alien.isBoss) 1.55f else 1.25f,
                 colorRgb = 0xFBBF24,
-                textSize = if (isBoss) 17f else 14f
+                textSize = if (isBigBoss) 17f else 14f
             )
         )
 
-        val cargoBonus = ((tier.rewardCredits * (0.5f + random.nextFloat() * 0.35f)) / 25f).roundToInt() * 25
+        // Guaranteed Cargo Box drop (Boss aliens drop scaled 4x-based cargo rewards)
+        val cargoBonus = ((alien.rewardCredits * (0.5f + random.nextFloat() * 0.35f)) / 25f).roundToInt() * 25
         lootBoxes.add(
             LootBoxEntity(
                 id = nextLootId++,
@@ -1668,7 +1894,7 @@ class SpaceGameEngine(
             lockedAlienId = null
         }
 
-        spawnAlienForTier(tier, minDistanceFromPlayer = 480f)
+        spawnAlienForTier(tier, minDistanceFromPlayer = 600f)
         requestSave()
     }
 
@@ -1727,10 +1953,12 @@ class SpaceGameEngine(
             }
         }
         val (wx, wy) = randomPointInZone(tier)
+        val isBossVariant = random.nextFloat() < GameConfig.BOSS_SPAWN_CHANCE
         aliens.add(
             AlienEntity(
                 id = nextAlienId++,
                 tier = tier,
+                isBoss = isBossVariant,
                 x = x,
                 y = y,
                 angleRad = random.nextFloat() * 2f * PI.toFloat(),

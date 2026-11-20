@@ -28,6 +28,12 @@ class _HangarOverlayState extends State<HangarOverlay> {
     }
   }
 
+  void _buyOrSelectFormation(DroneFormation formation) {
+    if (widget.game.buyOrSelectFormation(formation)) {
+      setState(() {});
+    }
+  }
+
   void _buyItem(EquipmentItemId itemId) {
     if (widget.game.buyEquipment(itemId)) {
       setState(() {});
@@ -719,7 +725,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   ),
                   const SizedBox(width: 8.0),
                   Text(
-                    'FLAX: ${game.flaxVantCount} • IRIS: ${game.irisVantCount} • CFG ${game.activeConfig}',
+                    'FLAX: ${game.flaxVantCount} • IRIS: ${game.irisVantCount} • CFG ${game.activeConfig} • ${game.activeFormationSpec.displayName}',
                     style: const TextStyle(
                       color: Color(0xFFFBBF24),
                       fontSize: 10.5,
@@ -1300,6 +1306,174 @@ class _HangarOverlayState extends State<HangarOverlay> {
               ),
             ],
           ),
+          const SizedBox(height: 12.0),
+          const Text(
+            'DRONE FORMATIONS',
+            style: TextStyle(
+              color: Color(0xFF38BDF8),
+              fontSize: 11.0,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.9,
+            ),
+          ),
+          const SizedBox(height: 6.0),
+          ...List<Widget>.generate(2, (int rowIdx) {
+            final int start = rowIdx * 3;
+            final List<DroneFormation> rowFormations =
+                DroneFormation.values.sublist(start, start + 3);
+            return Padding(
+              padding: EdgeInsets.only(bottom: rowIdx == 0 ? 8.0 : 0.0),
+              child: Row(
+                children: List<Widget>.generate(rowFormations.length, (int c) {
+                  final DroneFormation formation = rowFormations[c];
+                  final DroneFormationSpec spec =
+                      DroneFormationCatalog.of(formation);
+                  final bool isOwned = game.ownedFormations.contains(formation);
+                  final bool isActive = game.activeFormation == formation;
+                  final bool canAct = (isOwned && !isActive) ||
+                      (!isOwned && game.credits >= spec.cost);
+                  return Expanded(
+                    child: Container(
+                      margin: EdgeInsets.only(right: c == 2 ? 0.0 : 8.0),
+                      padding: const EdgeInsets.all(9.0),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? spec.accentColor.withOpacity(0.14)
+                            : const Color(0xFF071020),
+                        borderRadius: BorderRadius.circular(10.0),
+                        border: Border.all(
+                          color: isActive
+                              ? spec.accentColor
+                              : spec.accentColor.withOpacity(0.45),
+                          width: isActive ? 1.6 : 1.0,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Container(
+                                width: 30.0,
+                                height: 30.0,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF040914),
+                                  borderRadius: BorderRadius.circular(7.0),
+                                  border: Border.all(
+                                    color: spec.accentColor.withOpacity(0.65),
+                                  ),
+                                ),
+                                child: CustomPaint(
+                                  painter: _FormationMiniPainter(
+                                    formation: formation,
+                                    accent: spec.accentColor,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 7.0),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Text(
+                                      spec.displayName,
+                                      maxLines: 1,
+                                      softWrap: false,
+                                      style: const TextStyle(
+                                        color: Color(0xFFF1F5F9),
+                                        fontSize: 11.8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    Text(
+                                      spec.cost == 0
+                                          ? 'DEFAULT'
+                                          : '${spec.cost} CR',
+                                      maxLines: 1,
+                                      softWrap: false,
+                                      style: TextStyle(
+                                        color: spec.accentColor,
+                                        fontSize: 9.8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 5.0),
+                          Text(
+                            spec.bonusLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: formation == DroneFormation.normal
+                                  ? const Color(0xFF94A3B8)
+                                  : const Color(0xFF4ADE80),
+                              fontSize: 9.8,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            spec.penaltyLabel ?? 'No penalties',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: spec.penaltyLabel != null
+                                  ? const Color(0xFFFF4D6D)
+                                  : const Color(0xFF64748B),
+                              fontSize: 9.6,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 6.0),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              onPressed: canAct
+                                  ? () => _buyOrSelectFormation(formation)
+                                  : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isOwned
+                                    ? const Color(0xFF00E5FF)
+                                    : spec.accentColor,
+                                foregroundColor: const Color(0xFF040711),
+                                disabledBackgroundColor: isActive
+                                    ? const Color(0x3322C55E)
+                                    : const Color(0xFF1A2438),
+                                disabledForegroundColor: isActive
+                                    ? const Color(0xFF4ADE80)
+                                    : const Color(0xFF64748B),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8.0,
+                                  vertical: 5.0,
+                                ),
+                                minimumSize: const Size(0.0, 32.0),
+                              ),
+                              child: Text(
+                                isActive
+                                    ? 'ACTIVE'
+                                    : (isOwned
+                                        ? 'EQUIP'
+                                        : 'BUY ${spec.cost} CR'),
+                                maxLines: 1,
+                                softWrap: false,
+                                style: const TextStyle(
+                                  fontSize: 10.4,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -1981,3 +2155,45 @@ IconData _categoryIcon(EquipmentCategory category) {
       return Icons.memory;
   }
 }
+
+class _FormationMiniPainter extends CustomPainter {
+  const _FormationMiniPainter({
+    required this.formation,
+    required this.accent,
+  });
+
+  final DroneFormation formation;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double cx = size.width * 0.5;
+    final double cy = size.height * 0.5;
+
+    final Paint shipPaint = Paint()..color = const Color(0xCCFFFFFF);
+    canvas.drawCircle(Offset(cx, cy), 2.1, shipPaint);
+
+    final Paint dronePaint = Paint()..color = accent;
+    const double previewScale = 0.125;
+
+    for (int i = 0; i < 8; i++) {
+      final DroneFormationSlot slot = DroneFormationCatalog.computeLocalSlot(
+        formation: formation,
+        index: i,
+        total: 8,
+        shipHullRadius: 24.0,
+        elapsedTime: 0.3,
+      );
+      // Rotate -90 degrees so the ship's forward (+X) axis points upward.
+      final double px = cx + slot.localY * previewScale;
+      final double py = cy - slot.localX * previewScale;
+      canvas.drawCircle(Offset(px, py), 1.75, dronePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FormationMiniPainter oldDelegate) {
+    return oldDelegate.formation != formation || oldDelegate.accent != accent;
+  }
+}
+

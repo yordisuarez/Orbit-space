@@ -54,6 +54,13 @@ class GamePersistence(context: Context) {
                 )
             }
             put("ownedVants", vantsArray)
+
+            val formationsArray = JSONArray()
+            for (formation in state.ownedFormations) {
+                formationsArray.put(formation.name)
+            }
+            put("ownedFormations", formationsArray)
+            put("activeFormation", state.activeFormation.name)
         }
         prefs.edit().putString(KEY_SAVE_JSON, root.toString()).apply()
     }
@@ -114,6 +121,18 @@ class GamePersistence(context: Context) {
                 }
             }
 
+            val parsedFormations = mutableSetOf(DroneFormation.NORMAL)
+            val formationsArray = root.optJSONArray("ownedFormations")
+            if (formationsArray != null) {
+                for (i in 0 until formationsArray.length()) {
+                    val fName = formationsArray.optString(i, "")
+                    DroneFormation.entries.firstOrNull { it.name == fName }?.let { parsedFormations.add(it) }
+                }
+            }
+            val parsedActiveFormation = DroneFormation.entries.firstOrNull {
+                it.name == root.optString("activeFormation", DroneFormation.NORMAL.name)
+            }?.takeIf { it in parsedFormations } ?: DroneFormation.NORMAL
+
             val laserCount = parsedActiveShip.laserSlotCount
             val shieldCount = parsedActiveShip.shieldSlotCount
 
@@ -137,6 +156,8 @@ class GamePersistence(context: Context) {
                 config2LaserIds = decodeSlotIds(root.optJSONArray("config2Lasers"), laserCount),
                 config2ShieldIds = decodeSlotIds(root.optJSONArray("config2Shields"), shieldCount),
                 ownedVants = parsedVants,
+                ownedFormations = parsedFormations,
+                activeFormation = parsedActiveFormation,
                 equippedSectorChipId = chipId,
                 currentMissionIndex = root.optInt("currentMissionIndex", 0).coerceIn(0, MissionCatalog.all.size),
                 currentMissionProgress = root.optInt("currentMissionProgress", 0).coerceAtLeast(0)

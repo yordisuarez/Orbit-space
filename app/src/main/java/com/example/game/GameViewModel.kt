@@ -84,6 +84,38 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun buyOrSelectFormation(formation: DroneFormation) {
+        if (engine.buyOrSelectFormation(formation)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun cycleOwnedFormation() {
+        if (engine.cycleOwnedFormation()) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun toggleTacticalMap() {
+        engine.toggleTacticalMap()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun closeTacticalMap() {
+        engine.closeTacticalMap()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun setAutopilotTarget(worldX: Float, worldY: Float) {
+        engine.setAutopilotTarget(worldX, worldY)
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun cancelAutopilot() {
+        engine.cancelAutopilot()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
     fun buyOrSelectShipClass(shipClass: ShipClass) {
         if (engine.buyOrSelectShipClass(shipClass)) {
             _hudState.value = engine.buildHudSnapshot()

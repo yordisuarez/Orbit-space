@@ -100,8 +100,9 @@ fun DrawScope.renderSpaceWorld(
             drawTacticalOverlays(engine)
         }
 
-        // Draw aliens (viewport culled) with distinct Canvas shapes per tier
+        // Draw aliens (viewport culled) with distinct Canvas shapes per tier + BOSS variants
         val lockedId = engine.lockedAlienId
+        val nativeCanvas = drawContext.canvas.nativeCanvas
         for (alien in engine.aliens) {
             if (alien.x < minX || alien.x > maxX || alien.y < minY || alien.y > maxY) {
                 continue
@@ -109,25 +110,34 @@ fun DrawScope.renderSpaceWorld(
             if (alien.id == lockedId) {
                 drawTargetLockReticle(alien, engine.elapsedTime)
             }
-            drawAlienShip(alien)
-            val barWidth = when (alien.tier) {
+            drawAlienShip(alien, engine.elapsedTime)
+            val baseBarWidth = when (alien.tier) {
                 AlienTier.DREADNOUGHT_BOSS -> 78f
                 AlienTier.DESTROYER -> 56f
                 AlienTier.HUNTER -> 46f
                 AlienTier.SCOUT -> 38f
             }
-            val barHeight = if (alien.tier == AlienTier.DREADNOUGHT_BOSS) 7f else 5.5f
-            val tierFill = Color(alien.tier.primaryColorHex)
-            val tierGlow = Color(alien.tier.accentColorHex)
+            val barWidth = if (alien.isBoss) baseBarWidth * 1.32f else baseBarWidth
+            val barHeight = if (alien.isBoss || alien.tier == AlienTier.DREADNOUGHT_BOSS) 7.5f else 5.5f
+            val tierFill = if (alien.isBoss) AmberCredits else Color(alien.tier.primaryColorHex)
+            val tierGlow = if (alien.isBoss) CrimsonDanger else Color(alien.tier.accentColorHex)
+            val barTopY = alien.y - alien.radius - 16f
             drawHealthBar(
                 centerX = alien.x,
-                topY = alien.y - alien.radius - 16f,
+                topY = barTopY,
                 width = barWidth,
                 height = barHeight,
                 ratio = (alien.hp / alien.maxHp).coerceIn(0f, 1f),
                 fillColor = tierGlow,
                 glowColor = tierFill
             )
+            if (alien.isBoss) {
+                popupPaint.textSize = 13f
+                popupPaint.color = android.graphics.Color.argb(220, 4, 7, 17)
+                nativeCanvas.drawText("BOSS", alien.x + 1f, barTopY - 5f, popupPaint)
+                popupPaint.color = android.graphics.Color.rgb(251, 191, 36)
+                nativeCanvas.drawText("BOSS", alien.x, barTopY - 6f, popupPaint)
+            }
         }
 
         // Draw laser beams & homing rockets (viewport culled)
@@ -222,11 +232,11 @@ private fun DrawScope.drawSectorGridAndZoneRings(
     val maxR = GameConfig.MAP_RADIUS
     val gridColor = Color(0x1238BDF8)
 
-    // Subtle intermediate navigation rings every 1000 units (culled by camera ring distance)
+    // Subtle intermediate navigation rings every 2500 units (culled by camera ring distance)
     val minVisibleR = (camDistFromOrigin - halfDiag - 60f).coerceAtLeast(0f)
     val maxVisibleR = camDistFromOrigin + halfDiag + 60f
 
-    var r = 1000f
+    var r = 2500f
     while (r < maxR) {
         val isZoneBorder = r == GameConfig.ZONE_1_MAX_RADIUS ||
             r == GameConfig.ZONE_2_MAX_RADIUS ||
@@ -239,7 +249,7 @@ private fun DrawScope.drawSectorGridAndZoneRings(
                 style = Stroke(width = 1.1f)
             )
         }
-        r += 1000f
+        r += 2500f
     }
 
     // 8 subtle radial sector spokes
@@ -633,6 +643,44 @@ private fun DrawScope.drawTacticalOverlays(engine: SpaceGameEngine) {
             )
         }
     }
+
+    // Active Autopilot dashed vector + pulsing cyan crosshair in world space
+    val apX = engine.autopilotTargetX
+    val apY = engine.autopilotTargetY
+    if (apX != null && apY != null) {
+        drawLine(
+            color = CyanLaser.copy(alpha = 0.30f),
+            start = Offset(player.x, player.y),
+            end = Offset(apX, apY),
+            strokeWidth = 1.6f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), -engine.elapsedTime * 36f)
+        )
+        val apPulse = 0.65f + 0.35f * sin(engine.elapsedTime * 6f)
+        val apCenter = Offset(apX, apY)
+        drawCircle(
+            color = CyanLaser.copy(alpha = 0.22f * apPulse),
+            radius = 22f * apPulse,
+            center = apCenter
+        )
+        drawCircle(
+            color = CyanLaser.copy(alpha = 0.85f),
+            radius = 12f,
+            center = apCenter,
+            style = Stroke(width = 1.8f)
+        )
+        drawLine(
+            color = CyanLaser,
+            start = Offset(apX - 18f, apY),
+            end = Offset(apX + 18f, apY),
+            strokeWidth = 1.4f
+        )
+        drawLine(
+            color = CyanLaser,
+            start = Offset(apX, apY - 18f),
+            end = Offset(apX, apY + 18f),
+            strokeWidth = 1.4f
+        )
+    }
 }
 
 private fun DrawScope.drawTargetLockReticle(alien: AlienEntity, time: Float) {
@@ -889,36 +937,36 @@ private fun DrawScope.drawOrbitingVants(engine: SpaceGameEngine) {
     if (vants.isEmpty()) return
 
     val player = engine.player
-    val orbitRadius = player.shipClass.hullRadius + 24f
-    val count = vants.size
-    val baseAngle = engine.elapsedTime * 1.45f
+    val formation = engine.activeFormation
+    val formAccent = Color(formation.accentHex)
     val pulse = 0.75f + 0.25f * sin(engine.elapsedTime * 6.5f)
 
-    // Subtle holographic orbital track ring
-    drawCircle(
-        color = CyanLaser.copy(alpha = 0.12f),
-        radius = orbitRadius,
-        center = Offset(player.x, player.y),
-        style = Stroke(
-            width = 1.0f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 8f), engine.elapsedTime * 14f)
+    // Subtle formation aura ring for RING / WHEEL / DIAMOND
+    if (formation == DroneFormation.RING || formation == DroneFormation.WHEEL) {
+        val ringR = if (formation == DroneFormation.RING) player.shipClass.hullRadius + 20f else player.shipClass.hullRadius + 30f
+        drawCircle(
+            color = formAccent.copy(alpha = 0.16f),
+            radius = ringR,
+            center = Offset(player.x, player.y),
+            style = Stroke(
+                width = 1.2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 7f), engine.elapsedTime * 22f)
+            )
         )
-    )
+    }
 
-    for (i in 0 until count) {
-        val vant = vants[i]
-        val theta = baseAngle + (i * (2f * PI.toFloat() / count))
-        val vx = player.x + cos(theta) * orbitRadius
-        val vy = player.y + sin(theta) * orbitRadius
+    for (vant in vants) {
+        val vx = if (vant.hasInitializedPosition) vant.worldX else player.x
+        val vy = if (vant.hasInitializedPosition) vant.worldY else player.y
         val center = Offset(vx, vy)
-        val facingDeg = Math.toDegrees((theta + PI * 0.5).toDouble()).toFloat()
+        val facingDeg = Math.toDegrees(vant.facingRad.toDouble()).toFloat()
 
         rotate(degrees = facingDeg, pivot = center) {
             when (vant.tier) {
                 VantTier.FLAX -> {
                     // Sleek silver/cyan mini-drone
                     drawCircle(
-                        color = CyanLaser.copy(alpha = 0.22f * pulse),
+                        color = formAccent.copy(alpha = 0.22f * pulse),
                         radius = 8.5f,
                         center = center
                     )
@@ -955,7 +1003,6 @@ private fun DrawScope.drawOrbitingVants(engine: SpaceGameEngine) {
                     }
                     drawPath(path = wings, color = Color(0xFF1D4ED8))
                     drawPath(path = wings, color = AmberCredits, style = Stroke(width = 1.6f))
-                    // Golden wing accent stripes
                     drawLine(
                         color = Color(0xFFFDE68A),
                         start = Offset(vx - 3.0f, vy - 6.8f),
@@ -1001,16 +1048,53 @@ private fun DrawScope.drawThrusterFlame(
     drawPath(path = inner, color = Color.White.copy(alpha = 0.92f))
 }
 
-private fun DrawScope.drawAlienShip(alien: AlienEntity) {
+private fun DrawScope.drawAlienShip(alien: AlienEntity, elapsedTime: Float) {
     val center = Offset(alien.x, alien.y)
     val degrees = Math.toDegrees(alien.angleRad.toDouble()).toFloat()
     val corePulse = 0.72f + 0.28f * sin(alien.pulsePhase)
     val primary = Color(alien.tier.primaryColorHex)
     val accent = Color(alien.tier.accentColorHex)
     val hit = alien.hitFlash > 0.22f
-    val trim = if (hit) Color.White else primary
+    val trim = if (hit) Color.White else if (alien.isBoss) AmberCredits else primary
 
-    rotate(degrees = degrees, pivot = center) {
+    // Pulsing crimson/gold BOSS aura ring around any Boss variant
+    if (alien.isBoss) {
+        val bossPulse = 0.55f + 0.45f * sin(elapsedTime * 5.2f + alien.id)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    CrimsonDanger.copy(alpha = 0.34f * bossPulse),
+                    AmberCredits.copy(alpha = 0.16f * bossPulse),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = alien.radius + 18f
+            ),
+            radius = alien.radius + 18f,
+            center = center
+        )
+        drawCircle(
+            color = CrimsonDanger.copy(alpha = 0.78f * bossPulse),
+            radius = alien.radius + 7f + 3f * bossPulse,
+            center = center,
+            style = Stroke(width = 2.4f)
+        )
+        drawCircle(
+            color = AmberCredits.copy(alpha = 0.72f),
+            radius = alien.radius + 3f,
+            center = center,
+            style = Stroke(
+                width = 1.6f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 7f), elapsedTime * 28f)
+            )
+        )
+    }
+
+    val shipScale = if (alien.isBoss) GameConfig.BOSS_SIZE_MULTIPLIER else 1f
+    withTransform({
+        scale(scaleX = shipScale, scaleY = shipScale, pivot = center)
+        rotate(degrees = degrees, pivot = center)
+    }) {
         when (alien.tier) {
             AlienTier.SCOUT -> {
                 // Zone 1: Small green/lime sharp dart triangle

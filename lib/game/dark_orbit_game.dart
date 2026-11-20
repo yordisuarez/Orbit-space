@@ -13,17 +13,21 @@ export 'game_models.dart';
 
 class DarkOrbitGame extends FlameGame with TapCallbacks {
   static const String hangarOverlayId = 'hangar';
+  static const String tacticalMapOverlayId = 'tactical_map';
   static const String _savePrefsKey = 'dark_orbit_mobile_save_v2';
 
   final Random rng = Random();
 
   late PlayerShipComponent player;
+  late VantFleetComponent vantFleet;
   late JoystickComponent moveJoystick;
   late JoystickComponent aimJoystick;
   late AttackButtonComponent attackButton;
   late RocketButtonComponent rocketButton;
   late ConfigButtonComponent configButton;
+  late FormationButtonComponent formationButton;
   late HangarButtonComponent hangarButton;
+  late AutopilotBadgeComponent autopilotBadge;
   late MissionHudComponent missionHud;
   late MinimapComponent minimap;
   late TacticalHudComponent tacticalHud;
@@ -34,6 +38,16 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   // Owned Ship Classes & Active Ship Class
   final Set<ShipClass> ownedShipClasses = <ShipClass>{ShipClass.interceptor};
   ShipClass activeShipClass = ShipClass.interceptor;
+
+  // Classic DarkOrbit VANT Drone Formations
+  final Set<DroneFormation> ownedFormations = <DroneFormation>{
+    DroneFormation.normal,
+  };
+  DroneFormation activeFormation = DroneFormation.normal;
+  double formationSwitchCooldown = 0.0;
+
+  // Tap-to-Fly Autopilot Waypoint
+  Vector2? autopilotTarget;
 
   // Owned equipment pool + Config 1 & Config 2 Laser/Shield slot grids + Dedicated Sector Chip slot
   final List<EquipmentItem> ownedItems = <EquipmentItem>[];
@@ -63,6 +77,8 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   double elapsedTime = 0.0;
 
   ShipClassSpec get activeShipSpec => ShipClassCatalog.of(activeShipClass);
+  DroneFormationSpec get activeFormationSpec =>
+      DroneFormationCatalog.of(activeFormation);
 
   List<EquipmentItem?> get laserSlots =>
       activeConfig == 2 ? config2LaserSlots : config1LaserSlots;
@@ -159,7 +175,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         (worldPos.y - cam.y).abs() <= halfH;
   }
 
-  // Dynamic Ship Stats (Ship + VANT active config gear; Speed strictly from Ship Class)
+  // Dynamic Ship Stats (Ship + VANT active config gear + Active Drone Formation modifiers)
   double get currentLaserDamage {
     double sum = GameConstants.playerBaseLaserDamage;
     for (final EquipmentItem? item in laserSlots) {
@@ -170,7 +186,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         if (item != null) sum += item.spec.damageBonus;
       }
     }
-    return sum;
+    return max(1.0, sum * activeFormationSpec.damageMult);
   }
 
   double get currentMaxShield {
@@ -183,13 +199,16 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         if (item != null) sum += item.spec.shieldBonus;
       }
     }
-    return sum;
+    return max(10.0, sum * activeFormationSpec.shieldMult);
   }
 
-  double get currentSpeed => activeShipSpec.speed;
+  double get currentSpeed => activeShipSpec.speed * activeFormationSpec.speedMult;
 
-  double get currentMaxHull =>
-      activeShipSpec.baseHull + (player.level - 1) * GameConstants.playerHpPerLevel;
+  double get currentMaxHull {
+    final double base = activeShipSpec.baseHull +
+        (player.level - 1) * GameConstants.playerHpPerLevel;
+    return max(40.0, base * activeFormationSpec.hullMult);
+  }
 
   @override
   Color backgroundColor() => const Color(0xFF040711);
@@ -201,12 +220,15 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     await world.add(SpaceMapComponent());
 
     player = PlayerShipComponent(position: Vector2.zero());
+    vantFleet = VantFleetComponent();
     _initStarterState();
     await _loadSavedGame();
     player
       ..hp = currentMaxHull
       ..shield = currentMaxShield;
+    _snapVantsToFormation();
     await world.add(player);
+    await world.add(vantFleet);
 
     for (final AlienTier tier in AlienTier.values) {
       final AlienTierSpec spec = AlienTierCatalog.of(tier);
@@ -269,7 +291,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     attackButton = AttackButtonComponent();
     rocketButton = RocketButtonComponent();
     configButton = ConfigButtonComponent();
+    formationButton = FormationButtonComponent();
     hangarButton = HangarButtonComponent();
+    autopilotBadge = AutopilotBadgeComponent();
     missionHud = MissionHudComponent();
     minimap = MinimapComponent();
     tacticalHud = TacticalHudComponent();
@@ -280,7 +304,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       attackButton,
       rocketButton,
       configButton,
+      formationButton,
       hangarButton,
+      autopilotBadge,
       missionHud,
       minimap,
       tacticalHud,
@@ -297,6 +323,12 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       ..clear()
       ..add(ShipClass.interceptor);
     activeShipClass = ShipClass.interceptor;
+    ownedFormations
+      ..clear()
+      ..add(DroneFormation.normal);
+    activeFormation = DroneFormation.normal;
+    formationSwitchCooldown = 0.0;
+    autopilotTarget = null;
     equippedSectorChip = null;
     ownedVants.clear();
     _nextVantId = 1;
@@ -340,6 +372,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         'activeShipClass': activeShipClass.name,
         'ownedShipClasses':
             ownedShipClasses.map((ShipClass s) => s.name).toList(),
+        'activeFormation': activeFormation.name,
+        'ownedFormations':
+            ownedFormations.map((DroneFormation f) => f.name).toList(),
         'nextId': _nextItemInstanceId,
         'nextVantId': _nextVantId,
         'equippedChipId': equippedSectorChip?.instanceId,
@@ -435,6 +470,35 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       }
       activeShipClass = restoredShip;
       _resizeSlotsForShip(activeShipClass);
+
+      ownedFormations
+        ..clear()
+        ..add(DroneFormation.normal);
+      final List<dynamic>? rawFormations =
+          data['ownedFormations'] as List<dynamic>?;
+      if (rawFormations != null) {
+        for (final dynamic f in rawFormations) {
+          if (f is String) {
+            for (final DroneFormation df in DroneFormation.values) {
+              if (df.name == f) {
+                ownedFormations.add(df);
+                break;
+              }
+            }
+          }
+        }
+      }
+      DroneFormation restoredFormation = DroneFormation.normal;
+      final String? activeFormationName = data['activeFormation'] as String?;
+      if (activeFormationName != null) {
+        for (final DroneFormation df in ownedFormations) {
+          if (df.name == activeFormationName) {
+            restoredFormation = df;
+            break;
+          }
+        }
+      }
+      activeFormation = restoredFormation;
 
       ownedItems
         ..clear()
@@ -585,6 +649,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       ..rocketCooldown = 0.0;
     autoFireEnabled = false;
     lockedTarget = null;
+    autopilotTarget = null;
+    formationSwitchCooldown = 0.0;
+    _snapVantsToFormation();
     await saveGame();
   }
 
@@ -592,6 +659,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   void update(double dt) {
     super.update(dt);
     elapsedTime += dt;
+    if (formationSwitchCooldown > 0.0) {
+      formationSwitchCooldown = max(0.0, formationSwitchCooldown - dt);
+    }
 
     if (aimJoystick.relativeDelta.length > 0.12) {
       final double aimAngle = atan2(
@@ -600,9 +670,12 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       );
       _lockClosestAlienInRadarCone(aimAngle);
     }
+
+    _updateVantFormationPositions(dt);
   }
 
   void openHangar() {
+    overlays.remove(tacticalMapOverlayId);
     pauseEngine();
     overlays.add(hangarOverlayId);
   }
@@ -612,6 +685,39 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     saveGame();
     overlays.remove(hangarOverlayId);
     resumeEngine();
+  }
+
+  void openTacticalMap() {
+    if (overlays.isActive(hangarOverlayId)) return;
+    overlays.add(tacticalMapOverlayId);
+  }
+
+  void closeTacticalMap() {
+    overlays.remove(tacticalMapOverlayId);
+  }
+
+  void toggleTacticalMap() {
+    if (overlays.isActive(tacticalMapOverlayId)) {
+      closeTacticalMap();
+    } else {
+      openTacticalMap();
+    }
+  }
+
+  void setAutopilotTarget(double worldX, double worldY) {
+    double tx = worldX;
+    double ty = worldY;
+    final double dist = sqrt(tx * tx + ty * ty);
+    if (dist > GameConstants.autopilotMaxTargetRadius && dist > 0.001) {
+      final double s = GameConstants.autopilotMaxTargetRadius / dist;
+      tx *= s;
+      ty *= s;
+    }
+    autopilotTarget = Vector2(tx, ty);
+  }
+
+  void cancelAutopilot() {
+    autopilotTarget = null;
   }
 
   void switchConfig(int configNumber) {
@@ -624,6 +730,110 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   void toggleConfig() {
     switchConfig(activeConfig == 1 ? 2 : 1);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Classic DarkOrbit Drone Formations & Smooth World-Space Lerp
+  // ---------------------------------------------------------------------------
+  bool buyOrSelectFormation(DroneFormation formation) {
+    if (ownedFormations.contains(formation)) {
+      if (activeFormation == formation) return false;
+      activeFormation = formation;
+      _syncPlayerVitalsToStats();
+      saveGame();
+      return true;
+    }
+    final DroneFormationSpec spec = DroneFormationCatalog.of(formation);
+    if (credits < spec.cost) return false;
+    credits -= spec.cost;
+    ownedFormations.add(formation);
+    activeFormation = formation;
+    _syncPlayerVitalsToStats();
+    saveGame();
+    return true;
+  }
+
+  bool cycleOwnedFormation() {
+    if (formationSwitchCooldown > 0.0) return false;
+    final List<DroneFormation> ordered = DroneFormation.values
+        .where((DroneFormation f) => ownedFormations.contains(f))
+        .toList();
+    if (ordered.length <= 1) return false;
+    final int curIdx = ordered.indexOf(activeFormation);
+    final DroneFormation next = ordered[(curIdx + 1) % ordered.length];
+    activeFormation = next;
+    formationSwitchCooldown = GameConstants.formationSwitchCooldownSec;
+    _syncPlayerVitalsToStats();
+    spawnFloatingText(
+      position: player.position + Vector2(0.0, -46.0),
+      text: '${DroneFormationCatalog.of(next).displayName} FORMATION',
+      color: DroneFormationCatalog.of(next).accentColor,
+      fontSize: 13.5,
+    );
+    saveGame();
+    return true;
+  }
+
+  void _snapVantsToFormation() {
+    final int total = ownedVants.length;
+    if (total == 0) return;
+    final double hullR = activeShipSpec.hullRadius;
+    final double cosA = cos(player.angle);
+    final double sinA = sin(player.angle);
+    for (int i = 0; i < total; i++) {
+      final VantDrone vant = ownedVants[i];
+      final DroneFormationSlot slot = DroneFormationCatalog.computeLocalSlot(
+        formation: activeFormation,
+        index: i,
+        total: total,
+        shipHullRadius: hullR,
+        elapsedTime: elapsedTime,
+      );
+      vant.worldX =
+          player.position.x + slot.localX * cosA - slot.localY * sinA;
+      vant.worldY =
+          player.position.y + slot.localX * sinA + slot.localY * cosA;
+      vant.facingRad = player.angle + slot.extraRotation;
+      vant.hasInitializedPosition = true;
+    }
+  }
+
+  void _updateVantFormationPositions(double dt) {
+    final int total = ownedVants.length;
+    if (total == 0) return;
+    final double hullR = activeShipSpec.hullRadius;
+    final double cosA = cos(player.angle);
+    final double sinA = sin(player.angle);
+    final double posAlpha = 1.0 - exp(-9.5 * dt);
+    final double rotAlpha = 1.0 - exp(-11.0 * dt);
+
+    for (int i = 0; i < total; i++) {
+      final VantDrone vant = ownedVants[i];
+      final DroneFormationSlot slot = DroneFormationCatalog.computeLocalSlot(
+        formation: activeFormation,
+        index: i,
+        total: total,
+        shipHullRadius: hullR,
+        elapsedTime: elapsedTime,
+      );
+      final double targetX =
+          player.position.x + slot.localX * cosA - slot.localY * sinA;
+      final double targetY =
+          player.position.y + slot.localX * sinA + slot.localY * cosA;
+      final double targetRot = player.angle + slot.extraRotation;
+
+      if (!vant.hasInitializedPosition) {
+        vant.worldX = targetX;
+        vant.worldY = targetY;
+        vant.facingRad = targetRot;
+        vant.hasInitializedPosition = true;
+      } else {
+        vant.worldX += (targetX - vant.worldX) * posAlpha;
+        vant.worldY += (targetY - vant.worldY) * posAlpha;
+        final double diff = _normalizeAngle(targetRot - vant.facingRad);
+        vant.facingRad = _normalizeAngle(vant.facingRad + diff * rotAlpha);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1259,8 +1469,11 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   void spawnAlien(AlienTier tier, {double minDistFromPlayer = 480.0}) {
     final AlienTierSpec spec = AlienTierCatalog.of(tier);
-    final double inner = spec.minRadius + spec.radius + 50.0;
-    final double outer = spec.maxRadius - spec.radius - 50.0;
+    final bool isBoss = rng.nextDouble() < GameConstants.bossSpawnChance;
+    final double effRadius =
+        isBoss ? spec.radius * GameConstants.bossSizeMultiplier : spec.radius;
+    final double inner = spec.minRadius + effRadius + 50.0;
+    final double outer = spec.maxRadius - effRadius - 50.0;
     Vector2 pos = randomPointInAnnulus(inner, outer);
     for (int i = 0; i < 16; i++) {
       final Vector2 candidate = randomPointInAnnulus(inner, outer);
@@ -1272,6 +1485,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     final AlienShipComponent alien = AlienShipComponent(
       tier: tier,
       position: pos,
+      isBoss: isBoss,
     );
     aliens.add(alien);
     world.add(alien);
@@ -1317,11 +1531,16 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     world.add(box);
   }
 
-  void spawnCargoBox(Vector2 position, AlienTierSpec spec) {
+  void spawnCargoBox(
+    Vector2 position,
+    AlienTierSpec spec, {
+    bool isBoss = false,
+  }) {
+    final int baseCr = isBoss
+        ? spec.rewardCredits * GameConstants.bossRewardMultiplier
+        : spec.rewardCredits;
     final int bonus =
-        ((spec.rewardCredits * (0.5 + rng.nextDouble() * 0.35)) / 25.0)
-                .round() *
-            25;
+        ((baseCr * (0.5 + rng.nextDouble() * 0.35)) / 25.0).round() * 25;
     final LootBoxComponent cargo = LootBoxComponent(
       kind: LootBoxKind.cargoBox,
       position: position.clone(),
@@ -1349,17 +1568,21 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     );
   }
 
-  void spawnExplosion(Vector2 position, AlienTierSpec spec) {
-    final bool isBoss = spec.tier == AlienTier.dreadnoughtBoss;
+  void spawnExplosion(
+    Vector2 position,
+    AlienTierSpec spec, {
+    bool isBossVariant = false,
+  }) {
+    final bool bigBoom = isBossVariant || spec.tier == AlienTier.dreadnoughtBoss;
     world.add(
       ShockwaveRingComponent(
         position: position.clone(),
-        maxRadius: isBoss ? 140.0 : 76.0,
-        duration: isBoss ? 0.65 : 0.42,
-        color: spec.primaryColor,
+        maxRadius: bigBoom ? 145.0 : 76.0,
+        duration: bigBoom ? 0.65 : 0.42,
+        color: isBossVariant ? const Color(0xFFFBBF24) : spec.primaryColor,
       ),
     );
-    final int count = isBoss ? 30 : 16;
+    final int count = bigBoom ? 32 : 16;
     final List<Color> palette = <Color>[
       spec.primaryColor,
       spec.accentColor,
@@ -1369,13 +1592,13 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     for (int i = 0; i < count; i++) {
       final double angle = rng.nextDouble() * 2.0 * pi;
       final double speed =
-          (isBoss ? 90.0 : 60.0) + rng.nextDouble() * (isBoss ? 250.0 : 190.0);
+          (bigBoom ? 90.0 : 60.0) + rng.nextDouble() * (bigBoom ? 250.0 : 190.0);
       world.add(
         ExplosionParticleComponent(
           position: position.clone(),
           velocity: Vector2(cos(angle) * speed, sin(angle) * speed),
-          radius: (isBoss ? 3.2 : 2.2) + rng.nextDouble() * 3.4,
-          life: (isBoss ? 0.55 : 0.36) + rng.nextDouble() * 0.4,
+          radius: (bigBoom ? 3.2 : 2.2) + rng.nextDouble() * 3.4,
+          life: (bigBoom ? 0.55 : 0.36) + rng.nextDouble() * 0.4,
           color: palette[rng.nextInt(palette.length)],
         ),
       );
@@ -1384,12 +1607,15 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   void onAlienDestroyed(AlienShipComponent alien) {
     final AlienTierSpec spec = alien.spec;
+    final int rewardCredits = alien.effectiveRewardCredits;
+    final int rewardXp = alien.effectiveRewardXp;
     aliens.remove(alien);
     alien.removeFromParent();
-    credits += spec.rewardCredits;
+    credits += rewardCredits;
     kills += 1;
-    addXp(spec.rewardXp);
+    addXp(rewardXp);
 
+    // Boss kills count toward their Sector's normal alien mission objectives
     switch (alien.tier) {
       case AlienTier.scout:
         recordMissionProgress(MissionGoalType.destroyScouts);
@@ -1401,14 +1627,19 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         break;
     }
 
-    spawnExplosion(alien.position, spec);
+    spawnExplosion(alien.position, spec, isBossVariant: alien.isBoss);
     spawnFloatingText(
-      position: alien.position + Vector2(0.0, -spec.radius - 14.0),
-      text: '+${spec.rewardCredits} CR  +${spec.rewardXp} XP',
+      position: alien.position + Vector2(0.0, -alien.effectiveRadius - 14.0),
+      text: alien.isBoss
+          ? 'BOSS DOWN! +$rewardCredits CR  +$rewardXp XP'
+          : '+$rewardCredits CR  +$rewardXp XP',
       color: const Color(0xFFFBBF24),
-      fontSize: spec.tier == AlienTier.dreadnoughtBoss ? 16.0 : 13.5,
+      fontSize: (alien.isBoss || spec.tier == AlienTier.dreadnoughtBoss)
+          ? 16.0
+          : 13.5,
     );
-    spawnCargoBox(alien.position, spec);
+    // Guaranteed Cargo Box drop
+    spawnCargoBox(alien.position, spec, isBoss: alien.isBoss);
     if (lockedTarget == alien) {
       lockedTarget = null;
     }
@@ -1424,7 +1655,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     double bestDist = 74.0;
     for (final AlienShipComponent alien in aliens) {
       final double d = alien.position.distanceTo(worldPos);
-      if (d <= max(bestDist, alien.spec.radius + 32.0)) {
+      if (d <= max(bestDist, alien.effectiveRadius + 32.0)) {
         bestDist = d;
         tapped = alien;
       }
@@ -1483,7 +1714,7 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       ..color = const Color(0x1438BDF8)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
-    for (double r = 1000.0; r < maxR; r += 1000.0) {
+    for (double r = 2500.0; r < maxR; r += 2500.0) {
       if (r == GameConstants.zone1MaxRadius ||
           r == GameConstants.zone2MaxRadius ||
           r == GameConstants.zone3MaxRadius) {
@@ -1557,6 +1788,61 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 4.5,
       );
+    }
+
+    // World-space Autopilot faint dashed trajectory & pulsing waypoint crosshair
+    final Vector2? ap = gameRef.autopilotTarget;
+    if (ap != null) {
+      final Offset start = Offset(gameRef.player.position.x, gameRef.player.position.y);
+      final Offset end = Offset(ap.x, ap.y);
+      final double dx = end.dx - start.dx;
+      final double dy = end.dy - start.dy;
+      final double totalDist = sqrt(dx * dx + dy * dy);
+      if (totalDist > 10.0) {
+        final double ux = dx / totalDist;
+        final double uy = dy / totalDist;
+        final Paint dashPaint = Paint()
+          ..color = const Color(0x5500E5FF)
+          ..strokeWidth = 2.0;
+        // Draw dashed segments within visible range around player/camera
+        final double maxDraw = min(totalDist, halfDiag + 200.0);
+        double d = 24.0;
+        while (d < maxDraw) {
+          final double dEnd = min(maxDraw, d + 18.0);
+          canvas.drawLine(
+            Offset(start.dx + ux * d, start.dy + uy * d),
+            Offset(start.dx + ux * dEnd, start.dy + uy * dEnd),
+            dashPaint,
+          );
+          d += 34.0;
+        }
+      }
+      if (gameRef.isInViewport(ap, margin: 60.0)) {
+        final double pulse = 0.55 + 0.45 * sin(gameRef.elapsedTime * 6.0);
+        final double r = 18.0 + 6.0 * pulse;
+        canvas.drawCircle(
+          end,
+          r,
+          Paint()
+            ..color = const Color(0xFF00E5FF).withOpacity(0.45 + 0.45 * pulse)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.2,
+        );
+        final Paint cross = Paint()
+          ..color = const Color(0xCC00E5FF)
+          ..strokeWidth = 1.6;
+        canvas.drawLine(
+          Offset(end.dx - r - 8.0, end.dy),
+          Offset(end.dx + r + 8.0, end.dy),
+          cross,
+        );
+        canvas.drawLine(
+          Offset(end.dx, end.dy - r - 8.0),
+          Offset(end.dx, end.dy + r + 8.0),
+          cross,
+        );
+        canvas.drawCircle(end, 3.5, Paint()..color = Colors.white);
+      }
     }
   }
 
@@ -1716,8 +2002,26 @@ class PlayerShipComponent extends PositionComponent
 
     final Vector2 move = gameRef.moveJoystick.relativeDelta;
     if (move.length > 0.12) {
+      // Instant manual override cancels Autopilot
+      if (gameRef.autopilotTarget != null) {
+        gameRef.cancelAutopilot();
+      }
       position.add(move.normalized() * (gameRef.currentSpeed * dt));
       angle = atan2(move.y, move.x);
+    } else if (gameRef.autopilotTarget != null) {
+      final Vector2 toAp = gameRef.autopilotTarget! - position;
+      final double apDist = toAp.length;
+      if (apDist <= GameConstants.autopilotStopRadius) {
+        gameRef.cancelAutopilot();
+      } else {
+        final double desiredAngle = atan2(toAp.y, toAp.x);
+        final double angleDiff = gameRef._normalizeAngle(desiredAngle - angle);
+        angle = gameRef._normalizeAngle(
+          angle + angleDiff * (1.0 - exp(-9.0 * dt)),
+        );
+        final double step = min(apDist, gameRef.currentSpeed * dt);
+        position.add(toAp.normalized() * step);
+      }
     }
 
     const double maxPlayerRadius =
@@ -1764,11 +2068,21 @@ class PlayerShipComponent extends PositionComponent
         gameRef.currentMaxShield,
         shield + GameConstants.safeZoneShieldRegenRate * dt,
       );
-    } else if (timeSinceDamaged >= GameConstants.shieldRegenDelay) {
-      shield = min(
-        gameRef.currentMaxShield,
-        shield + GameConstants.shieldRegenRate * dt,
-      );
+    } else {
+      if (timeSinceDamaged >= GameConstants.shieldRegenDelay) {
+        shield = min(
+          gameRef.currentMaxShield,
+          shield + GameConstants.shieldRegenRate * dt,
+        );
+      }
+      // DIAMOND formation passive continuous combat shield regen (+1.5% Max Shield/sec)
+      final double diamondPct = gameRef.activeFormationSpec.combatShieldRegenPct;
+      if (diamondPct > 0.0 && shield < gameRef.currentMaxShield) {
+        shield = min(
+          gameRef.currentMaxShield,
+          shield + (gameRef.currentMaxShield * diamondPct) * dt,
+        );
+      }
     }
 
     if (fireCooldown > 0.0) {
@@ -1830,6 +2144,8 @@ class PlayerShipComponent extends PositionComponent
       shield = gameRef.currentMaxShield;
       position.setZero();
       gameRef.autoFireEnabled = false;
+      gameRef.cancelAutopilot();
+      gameRef._snapVantsToFormation();
       gameRef.saveGame();
     }
   }
@@ -1898,15 +2214,6 @@ class PlayerShipComponent extends PositionComponent
       );
     }
 
-    // Draw orbiting VANT drones smoothly in circular formation (world-upright)
-    if (gameRef.ownedVants.isNotEmpty) {
-      canvas.save();
-      canvas.translate(center.dx, center.dy);
-      canvas.rotate(-angle);
-      _drawOrbitingVants(canvas, hullR + 24.0);
-      canvas.restore();
-    }
-
     // Draw distinct silhouette for the active Ship Class
     _drawShipClassSilhouette(canvas, center, spec);
 
@@ -1933,125 +2240,13 @@ class PlayerShipComponent extends PositionComponent
     canvas.restore();
   }
 
-  void _drawOrbitingVants(Canvas canvas, double orbitRadius) {
-    final List<VantDrone> vants = gameRef.ownedVants;
-    final int count = vants.length;
-    if (count == 0) return;
-
-    final double baseAngle = gameRef.elapsedTime * 1.45;
-    final double pulse = 0.75 + 0.25 * sin(gameRef.elapsedTime * 6.5);
-
-    canvas.drawCircle(
-      Offset.zero,
-      orbitRadius,
-      Paint()
-        ..color = const Color(0x1F00E5FF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
-    );
-
-    for (int i = 0; i < count; i++) {
-      final VantDrone vant = vants[i];
-      final double theta = baseAngle + (i * (2.0 * pi / count));
-      final double vx = cos(theta) * orbitRadius;
-      final double vy = sin(theta) * orbitRadius;
-
-      canvas.save();
-      canvas.translate(vx, vy);
-      canvas.rotate(theta + pi * 0.5);
-
-      if (vant.tier == VantTier.flax) {
-        // Sleek silver/cyan mini-drone
-        canvas.drawCircle(
-          Offset.zero,
-          8.5,
-          Paint()..color = const Color(0xFF00E5FF).withOpacity(0.22 * pulse),
-        );
-        final Path hull = Path()
-          ..moveTo(7.5, 0.0)
-          ..lineTo(-3.5, -5.2)
-          ..lineTo(-6.0, 0.0)
-          ..lineTo(-3.5, 5.2)
-          ..close();
-        canvas.drawPath(hull, Paint()..color = const Color(0xFFCBD5E1));
-        canvas.drawPath(
-          hull,
-          Paint()
-            ..color = const Color(0xFF00E5FF)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
-        );
-        canvas.drawCircle(
-          const Offset(1.0, 0.0),
-          2.0,
-          Paint()..color = const Color(0xFF00E5FF),
-        );
-        canvas.drawCircle(
-          const Offset(1.0, 0.0),
-          0.9,
-          Paint()..color = Colors.white,
-        );
-      } else {
-        // Golden/blue winged mini-drone (Iris)
-        canvas.drawCircle(
-          Offset.zero,
-          10.5,
-          Paint()..color = const Color(0xFFFBBF24).withOpacity(0.26 * pulse),
-        );
-        final Path wings = Path()
-          ..moveTo(9.0, 0.0)
-          ..lineTo(1.5, -4.0)
-          ..lineTo(-4.5, -9.0)
-          ..lineTo(-7.0, -4.5)
-          ..lineTo(-5.0, 0.0)
-          ..lineTo(-7.0, 4.5)
-          ..lineTo(-4.5, 9.0)
-          ..lineTo(1.5, 4.0)
-          ..close();
-        canvas.drawPath(wings, Paint()..color = const Color(0xFF1D4ED8));
-        canvas.drawPath(
-          wings,
-          Paint()
-            ..color = const Color(0xFFFBBF24)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.6,
-        );
-        final Paint stripePaint = Paint()
-          ..color = const Color(0xFFFDE68A)
-          ..strokeWidth = 1.3
-          ..strokeCap = StrokeCap.round;
-        canvas.drawLine(
-          const Offset(-3.0, -6.8),
-          const Offset(3.0, -2.6),
-          stripePaint,
-        );
-        canvas.drawLine(
-          const Offset(-3.0, 6.8),
-          const Offset(3.0, 2.6),
-          stripePaint,
-        );
-        canvas.drawCircle(
-          const Offset(0.5, 0.0),
-          2.6,
-          Paint()..color = const Color(0xFF38BDF8),
-        );
-        canvas.drawCircle(
-          const Offset(0.5, 0.0),
-          1.1,
-          Paint()..color = Colors.white,
-        );
-      }
-
-      canvas.restore();
-    }
-  }
-
   void _drawShipClassSilhouette(
     Canvas canvas,
     Offset c,
     ShipClassSpec spec,
   ) {
-    final bool moving = gameRef.moveJoystick.relativeDelta.length > 0.12;
+    final bool moving = gameRef.moveJoystick.relativeDelta.length > 0.12 ||
+        gameRef.autopilotTarget != null;
     final Paint fillPaint = Paint()..color = spec.primaryColor;
     final Paint trimPaint = Paint()
       ..color = spec.accentColor
@@ -2198,27 +2393,176 @@ class PlayerShipComponent extends PositionComponent
 }
 
 // =============================================================================
-// ALIEN SHIP COMPONENT (4 Distinct Zone Tiers)
+// VANT FLEET COMPONENT (World-Space Lerped Drone Formations)
+// =============================================================================
+class VantFleetComponent extends Component with HasGameRef<DarkOrbitGame> {
+  VantFleetComponent() : super(priority: 15);
+
+  @override
+  void render(Canvas canvas) {
+    final List<VantDrone> vants = gameRef.ownedVants;
+    if (vants.isEmpty) return;
+
+    final double pulse = 0.75 + 0.25 * sin(gameRef.elapsedTime * 6.5);
+    final Color formAccent = gameRef.activeFormationSpec.accentColor;
+
+    // Subtle formation ring guide for RING and WHEEL formations
+    if (gameRef.activeFormation == DroneFormation.ring ||
+        gameRef.activeFormation == DroneFormation.wheel) {
+      final double baseR = gameRef.activeShipSpec.hullRadius + 28.0;
+      final double r = gameRef.activeFormation == DroneFormation.ring
+          ? baseR * 1.08
+          : baseR * 1.32;
+      canvas.drawCircle(
+        Offset(gameRef.player.position.x, gameRef.player.position.y),
+        r,
+        Paint()
+          ..color = formAccent.withOpacity(0.16)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
+
+    for (final VantDrone vant in vants) {
+      if (!vant.hasInitializedPosition) continue;
+      canvas.save();
+      canvas.translate(vant.worldX, vant.worldY);
+      canvas.rotate(vant.facingRad);
+
+      if (vant.tier == VantTier.flax) {
+        canvas.drawCircle(
+          Offset.zero,
+          8.5,
+          Paint()..color = const Color(0xFF00E5FF).withOpacity(0.22 * pulse),
+        );
+        final Path hull = Path()
+          ..moveTo(7.5, 0.0)
+          ..lineTo(-3.5, -5.2)
+          ..lineTo(-6.0, 0.0)
+          ..lineTo(-3.5, 5.2)
+          ..close();
+        canvas.drawPath(hull, Paint()..color = const Color(0xFFCBD5E1));
+        canvas.drawPath(
+          hull,
+          Paint()
+            ..color = const Color(0xFF00E5FF)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.4,
+        );
+        canvas.drawCircle(
+          const Offset(1.0, 0.0),
+          2.0,
+          Paint()..color = const Color(0xFF00E5FF),
+        );
+        canvas.drawCircle(
+          const Offset(1.0, 0.0),
+          0.9,
+          Paint()..color = Colors.white,
+        );
+      } else {
+        canvas.drawCircle(
+          Offset.zero,
+          10.5,
+          Paint()..color = const Color(0xFFFBBF24).withOpacity(0.26 * pulse),
+        );
+        final Path wings = Path()
+          ..moveTo(9.0, 0.0)
+          ..lineTo(1.5, -4.0)
+          ..lineTo(-4.5, -9.0)
+          ..lineTo(-7.0, -4.5)
+          ..lineTo(-5.0, 0.0)
+          ..lineTo(-7.0, 4.5)
+          ..lineTo(-4.5, 9.0)
+          ..lineTo(1.5, 4.0)
+          ..close();
+        canvas.drawPath(wings, Paint()..color = const Color(0xFF1D4ED8));
+        canvas.drawPath(
+          wings,
+          Paint()
+            ..color = const Color(0xFFFBBF24)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.6,
+        );
+        final Paint stripePaint = Paint()
+          ..color = const Color(0xFFFDE68A)
+          ..strokeWidth = 1.3
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(
+          const Offset(-3.0, -6.8),
+          const Offset(3.0, -2.6),
+          stripePaint,
+        );
+        canvas.drawLine(
+          const Offset(-3.0, 6.8),
+          const Offset(3.0, 2.6),
+          stripePaint,
+        );
+        canvas.drawCircle(
+          const Offset(0.5, 0.0),
+          2.6,
+          Paint()..color = const Color(0xFF38BDF8),
+        );
+        canvas.drawCircle(
+          const Offset(0.5, 0.0),
+          1.1,
+          Paint()..color = Colors.white,
+        );
+      }
+
+      canvas.restore();
+    }
+  }
+}
+
+// =============================================================================
+// ALIEN SHIP COMPONENT (4 Distinct Zone Tiers + 20% Classic BOSS Variants)
 // =============================================================================
 class AlienShipComponent extends PositionComponent
     with HasGameRef<DarkOrbitGame> {
   AlienShipComponent({
     required this.tier,
     required super.position,
+    this.isBoss = false,
   })  : spec = AlienTierCatalog.of(tier),
-        hp = AlienTierCatalog.of(tier).maxHp,
+        hp = AlienTierCatalog.of(tier).maxHp *
+            (isBoss ? GameConstants.bossHpMultiplier : 1.0),
         super(
           anchor: Anchor.center,
-          size: Vector2.all(AlienTierCatalog.of(tier).radius * 2.5),
+          size: Vector2.all(
+            AlienTierCatalog.of(tier).radius *
+                (isBoss ? GameConstants.bossSizeMultiplier : 1.0) *
+                2.5,
+          ),
         );
 
   final AlienTier tier;
   final AlienTierSpec spec;
+  final bool isBoss;
   double hp;
   bool isAggro = false;
   double fireCooldown = 0.7;
   double pulsePhase = 0.0;
   Vector2? patrolTarget;
+
+  double get effectiveRadius =>
+      isBoss ? spec.radius * GameConstants.bossSizeMultiplier : spec.radius;
+
+  double get effectiveMaxHp =>
+      isBoss ? spec.maxHp * GameConstants.bossHpMultiplier : spec.maxHp;
+
+  double get effectiveLaserDamage => isBoss
+      ? spec.laserDamage * GameConstants.bossDamageMultiplier
+      : spec.laserDamage;
+
+  int get effectiveRewardCredits => isBoss
+      ? spec.rewardCredits * GameConstants.bossRewardMultiplier
+      : spec.rewardCredits;
+
+  int get effectiveRewardXp => isBoss
+      ? spec.rewardXp * GameConstants.bossRewardMultiplier
+      : spec.rewardXp;
+
+  String get displayCallsign => isBoss ? 'BOSS ${spec.callsign}' : spec.callsign;
 
   @override
   void update(double dt) {
@@ -2242,7 +2586,7 @@ class AlienShipComponent extends PositionComponent
       final double dist = toPlayer.length;
       if (dist > 0.001) {
         angle = atan2(toPlayer.y, toPlayer.x);
-        final double orbitDist = max(175.0, spec.radius * 5.2);
+        final double orbitDist = max(175.0, effectiveRadius * 4.8);
         if (dist > orbitDist) {
           position.add(toPlayer.normalized() * (spec.chaseSpeed * dt));
         }
@@ -2251,12 +2595,12 @@ class AlienShipComponent extends PositionComponent
           final Vector2 dir = toPlayer.normalized();
           gameRef.world.add(
             LaserBoltComponent(
-              position: position + dir * spec.radius,
+              position: position + dir * effectiveRadius,
               velocity: dir * spec.laserSpeed,
               angle: angle,
               fromPlayer: false,
-              damage: spec.laserDamage,
-              color: spec.primaryColor,
+              damage: effectiveLaserDamage,
+              color: isBoss ? const Color(0xFFFF2E4C) : spec.primaryColor,
             ),
           );
         }
@@ -2272,8 +2616,8 @@ class AlienShipComponent extends PositionComponent
       }
     }
 
-    final double innerR = spec.minRadius + spec.radius + 26.0;
-    final double outerR = spec.maxRadius - spec.radius - 26.0;
+    final double innerR = spec.minRadius + effectiveRadius + 26.0;
+    final double outerR = spec.maxRadius - effectiveRadius - 26.0;
     final double d = position.length;
     if (d < innerR && d > 0.001) {
       position.scale(innerR / d);
@@ -2284,8 +2628,8 @@ class AlienShipComponent extends PositionComponent
 
   Vector2 _pickZoneWaypoint() {
     return gameRef.randomPointInAnnulus(
-      spec.minRadius + spec.radius + 50.0,
-      spec.maxRadius - spec.radius - 50.0,
+      spec.minRadius + effectiveRadius + 50.0,
+      spec.maxRadius - effectiveRadius - 50.0,
     );
   }
 
@@ -2296,7 +2640,7 @@ class AlienShipComponent extends PositionComponent
       position: position +
           Vector2(
             (gameRef.rng.nextDouble() - 0.5) * 18.0,
-            -spec.radius - 10.0,
+            -effectiveRadius - 10.0,
           ),
       text: isRocket ? '-${amount.round()} RKT' : '-${amount.round()}',
       color: isRocket ? const Color(0xFFFB923C) : Colors.white,
@@ -2309,14 +2653,40 @@ class AlienShipComponent extends PositionComponent
 
   @override
   void render(Canvas canvas) {
-    if (!gameRef.isInViewport(position, margin: spec.radius + 80.0)) return;
+    if (!gameRef.isInViewport(position, margin: effectiveRadius + 90.0)) return;
     final Offset c = Offset(size.x * 0.5, size.y * 0.5);
     final double corePulse = 0.72 + 0.28 * sin(pulsePhase);
+
+    // Pulsing Crimson / Gold BOSS Aura Ring
+    if (isBoss) {
+      final double auraPulse = 0.55 + 0.45 * sin(pulsePhase * 1.45);
+      canvas.drawCircle(
+        c,
+        effectiveRadius + 14.0 + 5.0 * auraPulse,
+        Paint()..color = const Color(0xFFFF2E4C).withOpacity(0.14 + 0.14 * auraPulse),
+      );
+      canvas.drawCircle(
+        c,
+        effectiveRadius + 10.0 + 3.0 * auraPulse,
+        Paint()
+          ..color = const Color(0xFFFBBF24).withOpacity(0.50 + 0.40 * auraPulse)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.6,
+      );
+      canvas.drawCircle(
+        c,
+        effectiveRadius + 5.0,
+        Paint()
+          ..color = const Color(0xFFFF2E4C).withOpacity(0.75)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6,
+      );
+    }
 
     if (gameRef.lockedTarget == this) {
       canvas.drawCircle(
         c,
-        spec.radius + 11.0,
+        effectiveRadius + (isBoss ? 18.0 : 11.0),
         Paint()
           ..color = const Color(0xDDFF2E4C)
           ..style = PaintingStyle.stroke
@@ -2324,53 +2694,61 @@ class AlienShipComponent extends PositionComponent
       );
     }
 
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    if (isBoss) {
+      canvas.scale(
+        GameConstants.bossSizeMultiplier,
+        GameConstants.bossSizeMultiplier,
+      );
+    }
     switch (tier) {
       case AlienTier.scout:
         final Path tri = Path()
-          ..moveTo(c.dx + 18.0, c.dy)
-          ..lineTo(c.dx - 13.0, c.dy - 13.0)
-          ..lineTo(c.dx - 7.0, c.dy)
-          ..lineTo(c.dx - 13.0, c.dy + 13.0)
+          ..moveTo(18.0, 0.0)
+          ..lineTo(-13.0, -13.0)
+          ..lineTo(-7.0, 0.0)
+          ..lineTo(-13.0, 13.0)
           ..close();
         canvas.drawPath(tri, Paint()..color = const Color(0xFF0E291A));
         canvas.drawPath(
           tri,
           Paint()
-            ..color = spec.primaryColor
+            ..color = isBoss ? const Color(0xFFFBBF24) : spec.primaryColor
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.9,
+            ..strokeWidth = isBoss ? 2.3 : 1.9,
         );
         canvas.drawCircle(
-          c,
+          Offset.zero,
           3.6 * corePulse,
-          Paint()..color = spec.primaryColor,
+          Paint()..color = isBoss ? const Color(0xFFFF2E4C) : spec.primaryColor,
         );
       case AlienTier.hunter:
         final Path diamond = Path()
-          ..moveTo(c.dx + 23.0, c.dy)
-          ..lineTo(c.dx + 2.0, c.dy - 17.0)
-          ..lineTo(c.dx - 19.0, c.dy)
-          ..lineTo(c.dx + 2.0, c.dy + 17.0)
+          ..moveTo(23.0, 0.0)
+          ..lineTo(2.0, -17.0)
+          ..lineTo(-19.0, 0.0)
+          ..lineTo(2.0, 17.0)
           ..close();
         canvas.drawPath(diamond, Paint()..color = const Color(0xFF2B2108));
         canvas.drawPath(
           diamond,
           Paint()
-            ..color = spec.primaryColor
+            ..color = isBoss ? const Color(0xFFFBBF24) : spec.primaryColor
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.1,
+            ..strokeWidth = isBoss ? 2.5 : 2.1,
         );
         canvas.drawCircle(
-          c,
+          Offset.zero,
           4.8 * corePulse,
-          Paint()..color = spec.primaryColor,
+          Paint()..color = isBoss ? const Color(0xFFFF2E4C) : spec.primaryColor,
         );
       case AlienTier.destroyer:
         final Path hex = Path();
         for (int i = 0; i < 6; i++) {
           final double a = i * pi / 3.0;
-          final double x = c.dx + cos(a) * 26.0;
-          final double y = c.dy + sin(a) * 26.0;
+          final double x = cos(a) * 26.0;
+          final double y = sin(a) * 26.0;
           if (i == 0) {
             hex.moveTo(x, y);
           } else {
@@ -2382,61 +2760,81 @@ class AlienShipComponent extends PositionComponent
         canvas.drawPath(
           hex,
           Paint()
-            ..color = spec.primaryColor
+            ..color = isBoss ? const Color(0xFFFBBF24) : spec.primaryColor
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.4,
+            ..strokeWidth = isBoss ? 2.8 : 2.4,
         );
         canvas.drawCircle(
-          c,
+          Offset.zero,
           6.5 * corePulse,
-          Paint()..color = spec.primaryColor,
+          Paint()..color = isBoss ? const Color(0xFFFF2E4C) : spec.primaryColor,
         );
       case AlienTier.dreadnoughtBoss:
         final Path boss = Path()
-          ..moveTo(c.dx + 42.0, c.dy - 10.0)
-          ..lineTo(c.dx + 24.0, c.dy - 14.0)
-          ..lineTo(c.dx + 12.0, c.dy - 36.0)
-          ..lineTo(c.dx - 16.0, c.dy - 38.0)
-          ..lineTo(c.dx - 36.0, c.dy - 20.0)
-          ..lineTo(c.dx - 30.0, c.dy)
-          ..lineTo(c.dx - 36.0, c.dy + 20.0)
-          ..lineTo(c.dx - 16.0, c.dy + 38.0)
-          ..lineTo(c.dx + 12.0, c.dy + 36.0)
-          ..lineTo(c.dx + 24.0, c.dy + 14.0)
-          ..lineTo(c.dx + 42.0, c.dy + 10.0)
-          ..lineTo(c.dx + 30.0, c.dy)
+          ..moveTo(42.0, -10.0)
+          ..lineTo(24.0, -14.0)
+          ..lineTo(12.0, -36.0)
+          ..lineTo(-16.0, -38.0)
+          ..lineTo(-36.0, -20.0)
+          ..lineTo(-30.0, 0.0)
+          ..lineTo(-36.0, 20.0)
+          ..lineTo(-16.0, 38.0)
+          ..lineTo(12.0, 36.0)
+          ..lineTo(24.0, 14.0)
+          ..lineTo(42.0, 10.0)
+          ..lineTo(30.0, 0.0)
           ..close();
         canvas.drawPath(boss, Paint()..color = const Color(0xFF1F0A2B));
         canvas.drawPath(
           boss,
           Paint()
-            ..color = spec.primaryColor
+            ..color = isBoss ? const Color(0xFFFBBF24) : spec.primaryColor
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.8,
+            ..strokeWidth = isBoss ? 3.2 : 2.8,
         );
         canvas.drawCircle(
-          c,
+          Offset.zero,
           10.0 * corePulse,
-          Paint()..color = spec.accentColor,
+          Paint()..color = isBoss ? const Color(0xFFFF2E4C) : spec.accentColor,
         );
-        canvas.drawCircle(c, 4.5, Paint()..color = Colors.white);
+        canvas.drawCircle(Offset.zero, 4.5, Paint()..color = Colors.white);
     }
+    canvas.restore();
 
+    // World-upright Health Bar + "BOSS" label
     canvas.save();
     canvas.translate(c.dx, c.dy);
     canvas.rotate(-angle);
-    final double barW = tier == AlienTier.dreadnoughtBoss ? 72.0 : 42.0;
-    final Rect bg = Rect.fromLTWH(-barW * 0.5, -spec.radius - 14.0, barW, 5.0);
+    final double barW = isBoss
+        ? max(62.0, effectiveRadius * 1.45)
+        : (tier == AlienTier.dreadnoughtBoss ? 72.0 : 42.0);
+    final double barTop = -effectiveRadius - (isBoss ? 18.0 : 14.0);
+    final Rect bg = Rect.fromLTWH(-barW * 0.5, barTop, barW, isBoss ? 6.5 : 5.0);
     canvas.drawRect(bg, Paint()..color = const Color(0xCC060B14));
     canvas.drawRect(
       Rect.fromLTWH(
         bg.left,
         bg.top,
-        barW * (hp / spec.maxHp).clamp(0.0, 1.0),
-        5.0,
+        barW * (hp / effectiveMaxHp).clamp(0.0, 1.0),
+        isBoss ? 6.5 : 5.0,
       ),
-      Paint()..color = spec.primaryColor,
+      Paint()..color = isBoss ? const Color(0xFFFF2E4C) : spec.primaryColor,
     );
+    if (isBoss) {
+      TextPaint(
+        style: const TextStyle(
+          color: Color(0xFFFBBF24),
+          fontSize: 10.5,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.0,
+        ),
+      ).render(
+        canvas,
+        'BOSS',
+        Vector2(0.0, barTop - 8.0),
+        anchor: Anchor.center,
+      );
+    }
     canvas.restore();
   }
 }
@@ -2489,7 +2887,8 @@ class LaserBoltComponent extends PositionComponent
       for (final AlienShipComponent alien in List<AlienShipComponent>.of(
         gameRef.aliens,
       )) {
-        if (position.distanceTo(alien.position) <= alien.spec.radius + 9.0) {
+        if (position.distanceTo(alien.position) <=
+            alien.effectiveRadius + 9.0) {
           alien.takeDamage(damage);
           removeFromParent();
           return;
@@ -2600,7 +2999,7 @@ class HomingRocketComponent extends PositionComponent
     for (final AlienShipComponent alien in List<AlienShipComponent>.of(
       gameRef.aliens,
     )) {
-      if (position.distanceTo(alien.position) <= alien.spec.radius + 14.0) {
+      if (position.distanceTo(alien.position) <= alien.effectiveRadius + 14.0) {
         gameRef.world.add(
           ShockwaveRingComponent(
             position: position.clone(),
@@ -3017,14 +3416,125 @@ class ConfigButtonComponent extends PositionComponent
   }
 }
 
-class HangarButtonComponent extends PositionComponent
+class FormationButtonComponent extends PositionComponent
     with TapCallbacks, HasGameRef<DarkOrbitGame> {
-  HangarButtonComponent() : super(size: Vector2(92.0, 38.0));
+  FormationButtonComponent() : super(size: Vector2(68.0, 38.0));
 
   @override
   void onGameResize(Vector2 size) {
     super.onGameResize(size);
-    position = Vector2(438.0, 14.0);
+    position = Vector2(436.0, 14.0);
+  }
+
+  @override
+  void onTapDown(TapDownEvent event) {
+    gameRef.cycleOwnedFormation();
+  }
+
+  @override
+  void render(Canvas canvas) {
+    final DroneFormationSpec spec = gameRef.activeFormationSpec;
+    final double cd = gameRef.formationSwitchCooldown;
+    final bool onCooldown = cd > 0.05;
+    final Color accent =
+        onCooldown ? const Color(0xFF64748B) : spec.accentColor;
+    final RRect rr = RRect.fromRectAndRadius(
+      Offset.zero & Size(size.x, size.y),
+      const Radius.circular(8.0),
+    );
+    canvas.drawRRect(rr, Paint()..color = const Color(0xCC0B1324));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6,
+    );
+    TextPaint(
+      style: TextStyle(
+        color: accent,
+        fontSize: 10.8,
+        fontWeight: FontWeight.bold,
+      ),
+    ).render(
+      canvas,
+      spec.shortCode,
+      Vector2(size.x * 0.5, 13.0),
+      anchor: Anchor.center,
+    );
+    TextPaint(
+      style: TextStyle(
+        color: onCooldown ? const Color(0xFFFBBF24) : const Color(0xFF94A3B8),
+        fontSize: 9.0,
+        fontWeight: FontWeight.bold,
+      ),
+    ).render(
+      canvas,
+      onCooldown
+          ? '${cd.ceil()}s'
+          : (gameRef.ownedFormations.length > 1 ? 'FMN' : '1/6'),
+      Vector2(size.x * 0.5, 27.0),
+      anchor: Anchor.center,
+    );
+  }
+}
+
+class AutopilotBadgeComponent extends PositionComponent
+    with TapCallbacks, HasGameRef<DarkOrbitGame> {
+  AutopilotBadgeComponent() : super(size: Vector2(118.0, 24.0));
+
+  @override
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
+    position = Vector2(362.0, 58.0);
+  }
+
+  @override
+  void onTapDown(TapDownEvent event) {
+    if (gameRef.autopilotTarget != null) {
+      gameRef.cancelAutopilot();
+    }
+  }
+
+  @override
+  void render(Canvas canvas) {
+    if (gameRef.autopilotTarget == null) return;
+    final double pulse = 0.65 + 0.35 * sin(gameRef.elapsedTime * 6.0);
+    final RRect rr = RRect.fromRectAndRadius(
+      Offset.zero & Size(size.x, size.y),
+      const Radius.circular(7.0),
+    );
+    canvas.drawRRect(rr, Paint()..color = const Color(0xCC062838));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = const Color(0xFF00E5FF).withOpacity(pulse)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4,
+    );
+    TextPaint(
+      style: const TextStyle(
+        color: Color(0xFF00E5FF),
+        fontSize: 10.0,
+        fontWeight: FontWeight.bold,
+      ),
+    ).render(
+      canvas,
+      'AUTOPILOT • TAP',
+      Vector2(size.x * 0.5, size.y * 0.5),
+      anchor: Anchor.center,
+    );
+  }
+}
+
+class HangarButtonComponent extends PositionComponent
+    with TapCallbacks, HasGameRef<DarkOrbitGame> {
+  HangarButtonComponent() : super(size: Vector2(88.0, 38.0));
+
+  @override
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
+    position = Vector2(510.0, 14.0);
   }
 
   @override
@@ -3268,7 +3778,7 @@ class TacticalHudComponent extends PositionComponent
 }
 
 class MinimapComponent extends PositionComponent
-    with HasGameRef<DarkOrbitGame> {
+    with TapCallbacks, HasGameRef<DarkOrbitGame> {
   MinimapComponent() : super(size: Vector2.all(126.0));
 
   @override
@@ -3278,10 +3788,16 @@ class MinimapComponent extends PositionComponent
   }
 
   @override
+  void onTapDown(TapDownEvent event) {
+    gameRef.toggleTacticalMap();
+  }
+
+  @override
   void render(Canvas canvas) {
     final Offset center = Offset(size.x * 0.5, size.y * 0.5);
     final double radarR = size.x * 0.5;
     final double scale = (radarR - 4.0) / GameConstants.mapRadius;
+    final double pulse = 0.55 + 0.45 * sin(gameRef.elapsedTime * 6.5);
 
     canvas.drawCircle(center, radarR, Paint()..color = const Color(0xCC0B1324));
     canvas.drawCircle(
@@ -3326,26 +3842,92 @@ class MinimapComponent extends PositionComponent
 
     for (final LootBoxComponent box in gameRef.lootBoxes) {
       canvas.drawCircle(
-        Offset(center.dx + box.position.x * scale,
-            center.dy + box.position.y * scale),
-        1.5,
-        Paint()..color = const Color(0xBBFACC15),
+        Offset(
+          center.dx + box.position.x * scale,
+          center.dy + box.position.y * scale,
+        ),
+        box.kind == LootBoxKind.cargoBox ? 1.8 : 1.2,
+        Paint()
+          ..color = box.kind == LootBoxKind.cargoBox
+              ? const Color(0xFFFBBF24)
+              : const Color(0x99FACC15),
       );
     }
 
     for (final AlienShipComponent alien in gameRef.aliens) {
-      canvas.drawCircle(
-        Offset(center.dx + alien.position.x * scale,
-            center.dy + alien.position.y * scale),
-        alien.spec.minimapDotRadius,
-        Paint()..color = alien.spec.primaryColor,
+      final Offset aPos = Offset(
+        center.dx + alien.position.x * scale,
+        center.dy + alien.position.y * scale,
       );
+      if (alien.isBoss) {
+        canvas.drawCircle(
+          aPos,
+          alien.spec.minimapDotRadius + 2.5 + 1.3 * pulse,
+          Paint()
+            ..color = const Color(0xFFFBBF24).withOpacity(0.28 + 0.35 * pulse),
+        );
+        canvas.drawCircle(
+          aPos,
+          alien.spec.minimapDotRadius + 1.2,
+          Paint()..color = const Color(0xFFFF2E4C),
+        );
+        canvas.drawCircle(
+          aPos,
+          alien.spec.minimapDotRadius * 0.65,
+          Paint()..color = const Color(0xFFFBBF24),
+        );
+      } else {
+        canvas.drawCircle(
+          aPos,
+          alien.spec.minimapDotRadius,
+          Paint()..color = alien.spec.primaryColor,
+        );
+      }
     }
 
     final Offset p = Offset(
       center.dx + gameRef.player.position.x * scale,
       center.dy + gameRef.player.position.y * scale,
     );
+
+    // Active Autopilot dashed trajectory & crosshair on small minimap
+    final Vector2? ap = gameRef.autopilotTarget;
+    if (ap != null) {
+      final Offset t = Offset(
+        center.dx + ap.x * scale,
+        center.dy + ap.y * scale,
+      );
+      final double dx = t.dx - p.dx;
+      final double dy = t.dy - p.dy;
+      final double dist = sqrt(dx * dx + dy * dy);
+      if (dist > 2.0) {
+        final double ux = dx / dist;
+        final double uy = dy / dist;
+        final Paint dash = Paint()
+          ..color = const Color(0xAA00E5FF)
+          ..strokeWidth = 1.2;
+        double d = 0.0;
+        while (d < dist) {
+          final double dEnd = min(dist, d + 4.0);
+          canvas.drawLine(
+            Offset(p.dx + ux * d, p.dy + uy * d),
+            Offset(p.dx + ux * dEnd, p.dy + uy * dEnd),
+            dash,
+          );
+          d += 8.0;
+        }
+      }
+      canvas.drawCircle(
+        t,
+        4.0,
+        Paint()
+          ..color = const Color(0xFF00E5FF).withOpacity(0.5 + 0.45 * pulse)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+      canvas.drawCircle(t, 1.7, Paint()..color = const Color(0xFF00E5FF));
+    }
+
     canvas.drawCircle(
       p,
       3.8,

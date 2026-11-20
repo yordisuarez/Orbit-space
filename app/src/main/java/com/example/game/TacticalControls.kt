@@ -74,6 +74,18 @@ import com.example.ui.theme.SpaceHudPanel
 import com.example.ui.theme.SpaceVoid
 import com.example.ui.theme.TacticalMuted
 import com.example.ui.theme.TacticalWhite
+import android.graphics.Paint as AndroidPaint
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -383,9 +395,11 @@ fun AttackLaserButton(
 fun TacticalMinimap(
     engine: SpaceGameEngine,
     frameTick: Long,
+    onExpandMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tickMarker = frameTick
+    val mapDesc = stringResource(R.string.cd_open_tactical_map)
 
     Box(
         modifier = modifier
@@ -393,8 +407,10 @@ fun TacticalMinimap(
             .clip(CircleShape)
             .background(SpaceHudPanel)
             .border(1.8.dp, CrimsonDanger.copy(alpha = 0.7f), CircleShape)
+            .clickable(onClick = onExpandMap)
             .padding(6.dp)
             .testTag("tactical_minimap")
+            .semantics { contentDescription = mapDesc }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             @Suppress("UNUSED_EXPRESSION")
@@ -404,6 +420,7 @@ fun TacticalMinimap(
             val radarRadius = size.minDimension * 0.5f
             val usableRadius = radarRadius - 4f
             val scale = usableRadius / GameConfig.MAP_RADIUS
+            val bossPulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
 
             val gridColor = Color(0x2238BDF8)
             drawLine(
@@ -466,8 +483,8 @@ fun TacticalMinimap(
                 val bx = center.x + box.x * scale
                 val by = center.y + box.y * scale
                 drawCircle(
-                    color = if (box.kind == LootBoxKind.CARGO_BOX) AmberCredits else Color(0xBBFACC15),
-                    radius = if (box.kind == LootBoxKind.CARGO_BOX) 2.0f else 1.4f,
+                    color = if (box.kind == LootBoxKind.CARGO_BOX) AmberCredits else Color(0x99FACC15),
+                    radius = if (box.kind == LootBoxKind.CARGO_BOX) 1.9f else 1.2f,
                     center = Offset(bx, by)
                 )
             }
@@ -479,28 +496,73 @@ fun TacticalMinimap(
                 val tierColor = Color(alien.tier.primaryColorHex)
                 if (alien.id == lockedId) {
                     drawCircle(
-                        color = CrimsonDanger.copy(alpha = 0.7f),
-                        radius = alien.tier.minimapDotRadius + 3.2f,
+                        color = CrimsonDanger.copy(alpha = 0.78f),
+                        radius = (if (alien.isBoss) alien.tier.minimapDotRadius + 5.0f else alien.tier.minimapDotRadius + 3.2f),
                         center = Offset(ax, ay),
                         style = Stroke(width = 1.4f)
                     )
                 }
-                if (alien.tier == AlienTier.DREADNOUGHT_BOSS) {
+                if (alien.isBoss) {
                     drawCircle(
-                        color = tierColor.copy(alpha = 0.32f),
-                        radius = alien.tier.minimapDotRadius + 2.2f,
+                        color = AmberCredits.copy(alpha = 0.28f + 0.35f * bossPulse),
+                        radius = alien.tier.minimapDotRadius + 2.8f + 1.4f * bossPulse,
+                        center = Offset(ax, ay)
+                    )
+                    drawCircle(
+                        color = CrimsonDanger,
+                        radius = alien.tier.minimapDotRadius + 1.3f,
+                        center = Offset(ax, ay)
+                    )
+                    drawCircle(
+                        color = AmberCredits,
+                        radius = alien.tier.minimapDotRadius * 0.65f,
+                        center = Offset(ax, ay)
+                    )
+                } else {
+                    if (alien.tier == AlienTier.DREADNOUGHT_BOSS) {
+                        drawCircle(
+                            color = tierColor.copy(alpha = 0.32f),
+                            radius = alien.tier.minimapDotRadius + 2.0f,
+                            center = Offset(ax, ay)
+                        )
+                    }
+                    drawCircle(
+                        color = tierColor,
+                        radius = alien.tier.minimapDotRadius,
                         center = Offset(ax, ay)
                     )
                 }
-                drawCircle(
-                    color = tierColor,
-                    radius = alien.tier.minimapDotRadius,
-                    center = Offset(ax, ay)
-                )
             }
 
             val px = center.x + engine.player.x * scale
             val py = center.y + engine.player.y * scale
+
+            // Active Autopilot dashed trajectory & waypoint on small minimap
+            val apX = engine.autopilotTargetX
+            val apY = engine.autopilotTargetY
+            if (apX != null && apY != null) {
+                val tx = center.x + apX * scale
+                val ty = center.y + apY * scale
+                drawLine(
+                    color = CyanLaser.copy(alpha = 0.65f),
+                    start = Offset(px, py),
+                    end = Offset(tx, ty),
+                    strokeWidth = 1.3f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+                )
+                drawCircle(
+                    color = CyanLaser.copy(alpha = 0.5f + 0.45f * bossPulse),
+                    radius = 4.2f,
+                    center = Offset(tx, ty),
+                    style = Stroke(width = 1.2f)
+                )
+                drawCircle(
+                    color = CyanLaser,
+                    radius = 1.8f,
+                    center = Offset(tx, ty)
+                )
+            }
+
             val shipAccent = Color(engine.player.shipClass.accentColorHex)
             drawCircle(
                 color = shipAccent.copy(alpha = 0.35f),
@@ -526,10 +588,345 @@ fun TacticalMinimap(
 }
 
 @Composable
+fun ExpandableTacticalMapOverlay(
+    engine: SpaceGameEngine,
+    frameTick: Long,
+    onSetAutopilot: (Float, Float) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val tickMarker = frameTick
+    val labelPaint = remember {
+        AndroidPaint().apply {
+            isAntiAlias = true
+            textAlign = AndroidPaint.Align.CENTER
+            textSize = 26f
+            isFakeBoldText = true
+        }
+    }
+
+    BoxWithConstraints(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0x6E020612))
+            .pointerInput(Unit) {
+                detectTapGestures { onClose() }
+            }
+            .testTag("tactical_map_overlay")
+    ) {
+        // ~75% of screen height (capped by width so circle never clips)
+        val circleDiameter = min(maxHeight.value * 0.78f, maxWidth.value * 0.78f).coerceAtLeast(220f).dp
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.pointerInput(Unit) {
+                // Absorb taps on the header/controls area so only outside-circle backdrop closes
+                detectTapGestures { }
+            }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xD6071122))
+                    .border(1.dp, CyanLaser.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Navigation,
+                    contentDescription = null,
+                    tint = CyanLaser,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = stringResource(R.string.tactical_map_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = CyanLaser,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Text(
+                    text = "• ${stringResource(R.string.tactical_map_hint)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TacticalMuted,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Button(
+                    onClick = onClose,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CrimsonDanger,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("tactical_map_close_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = stringResource(R.string.action_close),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(circleDiameter)
+                    .clip(CircleShape)
+                    .background(Color(0xC4050C1B))
+                    .border(2.2.dp, CyanLaser.copy(alpha = 0.8f), CircleShape)
+                    .pointerInput(Unit) {
+                        detectTapGestures { tapOffset ->
+                            val centerX = size.width * 0.5f
+                            val centerY = size.height * 0.5f
+                            val usableRadius = min(centerX, centerY) - 10f
+                            val dx = tapOffset.x - centerX
+                            val dy = tapOffset.y - centerY
+                            val tapDist = hypot(dx, dy)
+                            if (tapDist <= usableRadius + 8f && usableRadius > 1f) {
+                                val worldScale = GameConfig.MAP_RADIUS / usableRadius
+                                val wx = dx * worldScale
+                                val wy = dy * worldScale
+                                onSetAutopilot(wx, wy)
+                            } else {
+                                onClose()
+                            }
+                        }
+                    }
+                    .testTag("tactical_map_circle")
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    @Suppress("UNUSED_EXPRESSION")
+                    tickMarker
+
+                    val center = Offset(size.width * 0.5f, size.height * 0.5f)
+                    val mapPxRadius = size.minDimension * 0.5f - 10f
+                    val scale = mapPxRadius / GameConfig.MAP_RADIUS
+                    val pulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
+
+                    // Subtle polar crosshairs
+                    val gridColor = Color(0x2838BDF8)
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(center.x - mapPxRadius, center.y),
+                        end = Offset(center.x + mapPxRadius, center.y),
+                        strokeWidth = 1.2f
+                    )
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(center.x, center.y - mapPxRadius),
+                        end = Offset(center.x, center.y + mapPxRadius),
+                        strokeWidth = 1.2f
+                    )
+
+                    // 4 Concentric Sector Rings
+                    val ringDash = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                    drawCircle(
+                        color = Color(0x994ADE80),
+                        radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
+                        center = center,
+                        style = Stroke(width = 1.6f, pathEffect = ringDash)
+                    )
+                    drawCircle(
+                        color = Color(0x99FACC15),
+                        radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
+                        center = center,
+                        style = Stroke(width = 1.6f, pathEffect = ringDash)
+                    )
+                    drawCircle(
+                        color = Color(0x99FB923C),
+                        radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
+                        center = center,
+                        style = Stroke(width = 1.6f, pathEffect = ringDash)
+                    )
+                    drawCircle(
+                        color = CrimsonDanger.copy(alpha = 0.85f),
+                        radius = mapPxRadius,
+                        center = center,
+                        style = Stroke(width = 2.4f)
+                    )
+
+                    // Sector Labels S1..S4 along top vertical axis
+                    drawIntoCanvas { canvas ->
+                        labelPaint.textSize = (size.minDimension * 0.042f).coerceIn(18f, 30f)
+                        val sectors = listOf(
+                            Triple("S1", 2800f, 0xFF4ADE80.toInt()),
+                            Triple("S2", 7500f, 0xFFFACC15.toInt()),
+                            Triple("S3", 12500f, 0xFFFB923C.toInt()),
+                            Triple("S4", 17500f, 0xFFC084FC.toInt())
+                        )
+                        for ((name, worldR, colorInt) in sectors) {
+                            labelPaint.color = colorInt
+                            canvas.nativeCanvas.drawText(
+                                name,
+                                center.x,
+                                center.y - worldR * scale + labelPaint.textSize * 0.35f,
+                                labelPaint
+                            )
+                        }
+                    }
+
+                    // Central Safe Zone Base (Cyan)
+                    val safeR = (GameConfig.SAFE_ZONE_RADIUS * scale).coerceAtLeast(8f)
+                    drawCircle(
+                        color = CyanLaser.copy(alpha = 0.24f),
+                        radius = safeR,
+                        center = center
+                    )
+                    drawCircle(
+                        color = CyanLaser,
+                        radius = safeR,
+                        center = center,
+                        style = Stroke(width = 1.8f)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 3.2f,
+                        center = center
+                    )
+
+                    // Bonus & Cargo Boxes
+                    for (box in engine.lootBoxes) {
+                        val bx = center.x + box.x * scale
+                        val by = center.y + box.y * scale
+                        val isCargo = box.kind == LootBoxKind.CARGO_BOX
+                        drawCircle(
+                            color = if (isCargo) AmberCredits else Color(0xBBFACC15),
+                            radius = if (isCargo) 3.4f else 2.2f,
+                            center = Offset(bx, by)
+                        )
+                    }
+
+                    // Aliens (normal & pulsing BOSS)
+                    val lockedId = engine.lockedAlienId
+                    for (alien in engine.aliens) {
+                        val ax = center.x + alien.x * scale
+                        val ay = center.y + alien.y * scale
+                        val tierColor = Color(alien.tier.primaryColorHex)
+
+                        if (alien.id == lockedId) {
+                            drawCircle(
+                                color = CrimsonDanger,
+                                radius = if (alien.isBoss) 11f else 8f,
+                                center = Offset(ax, ay),
+                                style = Stroke(width = 1.8f)
+                            )
+                        }
+
+                        if (alien.isBoss) {
+                            drawCircle(
+                                color = AmberCredits.copy(alpha = 0.25f + 0.38f * pulse),
+                                radius = 7.5f + 3.2f * pulse,
+                                center = Offset(ax, ay)
+                            )
+                            drawCircle(
+                                color = CrimsonDanger.copy(alpha = 0.95f),
+                                radius = 5.4f,
+                                center = Offset(ax, ay)
+                            )
+                            drawCircle(
+                                color = AmberCredits,
+                                radius = 2.6f,
+                                center = Offset(ax, ay)
+                            )
+                        } else {
+                            drawCircle(
+                                color = tierColor,
+                                radius = (alien.tier.minimapDotRadius * 1.15f).coerceAtLeast(2.8f),
+                                center = Offset(ax, ay)
+                            )
+                        }
+                    }
+
+                    val px = center.x + engine.player.x * scale
+                    val py = center.y + engine.player.y * scale
+
+                    // Active Autopilot Dashed Route & Crosshair
+                    val apX = engine.autopilotTargetX
+                    val apY = engine.autopilotTargetY
+                    if (apX != null && apY != null) {
+                        val tx = center.x + apX * scale
+                        val ty = center.y + apY * scale
+                        drawLine(
+                            color = CyanLaser.copy(alpha = 0.72f),
+                            start = Offset(px, py),
+                            end = Offset(tx, ty),
+                            strokeWidth = 2.0f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 7f), 0f)
+                        )
+                        val wpR = 7.5f + 3f * pulse
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.45f + 0.45f * pulse),
+                            radius = wpR,
+                            center = Offset(tx, ty),
+                            style = Stroke(width = 1.8f)
+                        )
+                        drawLine(
+                            color = CyanLaser,
+                            start = Offset(tx - wpR - 3f, ty),
+                            end = Offset(tx + wpR + 3f, ty),
+                            strokeWidth = 1.4f
+                        )
+                        drawLine(
+                            color = CyanLaser,
+                            start = Offset(tx, ty - wpR - 3f),
+                            end = Offset(tx, ty + wpR + 3f),
+                            strokeWidth = 1.4f
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 2.5f,
+                            center = Offset(tx, ty)
+                        )
+                    }
+
+                    // Player directional chevron
+                    val shipAccent = Color(engine.player.shipClass.accentColorHex)
+                    drawCircle(
+                        color = shipAccent.copy(alpha = 0.30f),
+                        radius = 12f,
+                        center = Offset(px, py)
+                    )
+                    val angle = engine.player.angleRad
+                    val cosA = cos(angle)
+                    val sinA = sin(angle)
+                    val tip = Offset(px + cosA * 10f, py + sinA * 10f)
+                    val left = Offset(px + (-cosA * 6f - sinA * 6f), py + (-sinA * 6f + cosA * 6f))
+                    val right = Offset(px + (-cosA * 6f + sinA * 6f), py + (-sinA * 6f - cosA * 6f))
+                    val chevron = Path().apply {
+                        moveTo(tip.x, tip.y)
+                        lineTo(left.x, left.y)
+                        lineTo(px - cosA * 2f, py - sinA * 2f)
+                        lineTo(right.x, right.y)
+                        close()
+                    }
+                    drawPath(path = chevron, color = shipAccent)
+                    drawPath(path = chevron, color = Color.White, style = Stroke(width = 1.4f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TopTacticalHud(
     hud: HudSnapshot,
     onOpenHangar: () -> Unit,
     onToggleConfig: () -> Unit,
+    onCycleFormation: () -> Unit,
+    onCancelAutopilot: () -> Unit,
     onClaimMission: () -> Unit,
     onTogglePause: () -> Unit,
     modifier: Modifier = Modifier
@@ -683,6 +1080,50 @@ fun TopTacticalHud(
                     ),
                     style = MaterialTheme.typography.labelLarge,
                     color = cfgColor
+                )
+            }
+
+            // Compact Drone Formation Switcher Button (3-second cooldown)
+            val fmDesc = stringResource(R.string.cd_cycle_formation)
+            val fmColor = Color(hud.activeFormation.accentHex)
+            val fmOnCooldown = hud.formationCooldownRemaining > 0.05f
+            val fmCanCycle = hud.ownedFormationCount > 1 && !fmOnCooldown
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (fmOnCooldown) Color(0xCC0D1628) else SpaceHudPanel)
+                    .border(
+                        width = 1.4.dp,
+                        color = if (fmOnCooldown) TacticalMuted.copy(alpha = 0.5f) else fmColor.copy(alpha = 0.8f),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    .clickable(enabled = fmCanCycle, onClick = onCycleFormation)
+                    .padding(horizontal = 9.dp)
+                    .testTag("formation_cycle_button")
+                    .semantics { contentDescription = fmDesc }
+            ) {
+                Text(
+                    text = hud.activeFormation.shortCode,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (fmOnCooldown) TacticalMuted else fmColor,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Text(
+                    text = if (fmOnCooldown) {
+                        "${ceil(hud.formationCooldownRemaining.toDouble()).toInt()}s"
+                    } else if (hud.ownedFormationCount > 1) {
+                        "FMN"
+                    } else {
+                        "1/${DroneFormation.entries.size}"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (fmOnCooldown) AmberCredits else TacticalMuted,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
 
@@ -856,6 +1297,36 @@ fun TopTacticalHud(
                         text = radText,
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White
+                    )
+                }
+            }
+
+            if (hud.isAutopilotActive) {
+                val apCancelDesc = stringResource(R.string.cd_cancel_autopilot)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xCC062838))
+                        .border(1.2.dp, CyanLaser.copy(alpha = glowPulse), RoundedCornerShape(8.dp))
+                        .clickable(onClick = onCancelAutopilot)
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                        .testTag("autopilot_badge")
+                        .semantics { contentDescription = apCancelDesc }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Navigation,
+                        contentDescription = null,
+                        tint = CyanLaser,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.hud_autopilot_badge),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyanLaser,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }

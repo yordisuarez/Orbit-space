@@ -79,4 +79,12 @@
     <string name="stat_shd">SHD</string>
     <string name="stat_spd">SPD</string>
     <string name="stat_hull">HULL</string>
+    <string name="hangar_shop_formations">DRONE FORMATIONS</string>
+    <string name="hud_autopilot_badge">AUTOPILOT</string>
+    <string name="tactical_map_title">TACTICAL SECTOR MAP</string>
+    <string name="tactical_map_hint">Tap inside map to set Autopilot waypoint</string>
+    <string name="action_close">CLOSE</string>
+    <string name="cd_cycle_formation">Cycle owned drone formation</string>
+    <string name="cd_open_tactical_map">Expand tactical sector map</string>
+    <string name="cd_cancel_autopilot">Cancel autopilot</string>
 </resources>

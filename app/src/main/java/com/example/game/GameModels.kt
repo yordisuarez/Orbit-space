@@ -1,15 +1,15 @@
 package com.example.game
 
 object GameConfig {
-    const val MAP_RADIUS = 8000f
-    const val SAFE_ZONE_RADIUS = 400f
-    const val ZONE_1_MAX_RADIUS = 2000f
-    const val ZONE_2_MAX_RADIUS = 4000f
-    const val ZONE_3_MAX_RADIUS = 6000f
-    const val ZONE_4_MAX_RADIUS = 8000f
+    const val MAP_RADIUS = 20000f
+    const val SAFE_ZONE_RADIUS = 600f
+    const val ZONE_1_MAX_RADIUS = 5000f
+    const val ZONE_2_MAX_RADIUS = 10000f
+    const val ZONE_3_MAX_RADIUS = 15000f
+    const val ZONE_4_MAX_RADIUS = 20000f
 
     const val BORDER_PADDING = 30f
-    const val RADIATION_WARNING_DISTANCE = 220f
+    const val RADIATION_WARNING_DISTANCE = 260f
     const val RADIATION_TICK_INTERVAL = 0.65f
 
     // Base bonuses independent of ship class
@@ -17,9 +17,21 @@ object GameConfig {
     const val PLAYER_BASE_MAX_SHIELD = 40f
     const val PLAYER_BASE_LASER_DAMAGE = 6f
 
-    // VANT (Drone) limits & pricing
+    // VANT (Drone) limits, pricing & formations
     const val MAX_VANTS = 8
     const val FLAX_VANT_COST = 600
+    const val FORMATION_SWITCH_COOLDOWN_SEC = 3.0f
+
+    // Boss alien variant scaling (20% spawn chance per sector)
+    const val BOSS_SPAWN_CHANCE = 0.20f
+    const val BOSS_HP_MULTIPLIER = 4f
+    const val BOSS_DAMAGE_MULTIPLIER = 2f
+    const val BOSS_REWARD_MULTIPLIER = 4
+    const val BOSS_SIZE_MULTIPLIER = 1.5f
+
+    // Tactical Map Autopilot
+    const val AUTOPILOT_STOP_RADIUS = 60f
+    const val AUTOPILOT_MAX_TARGET_RADIUS = 19800f
 
     // Sector 1 Alien Base Stats & 2.5x Exponential Scaling
     const val SECTOR_BASE_ALIEN_HP = 120.0
@@ -52,12 +64,12 @@ object GameConfig {
     const val RADAR_CONE_HALF_ANGLE_RAD = (28.0 * Math.PI / 180.0).toFloat()
 
     // Bonus Boxes & Cargo Loot
-    const val BONUS_BOX_COUNT = 45
+    const val BONUS_BOX_COUNT = 120
     const val LOOT_COLLECT_RADIUS = 42f
     const val CARGO_LIFETIME_SEC = 50f
 
-    const val STAR_COUNT = 1200
-    const val NEBULA_COUNT = 36
+    const val STAR_COUNT = 3000
+    const val NEBULA_COUNT = 64
 
     const val TAP_LOCK_RADIUS = 74f
     const val CAMERA_SMOOTHNESS = 8.5f
@@ -171,7 +183,7 @@ enum class AlienTier(
         callsign = "SCOUT",
         minRadius = GameConfig.SAFE_ZONE_RADIUS,
         maxRadius = GameConfig.ZONE_1_MAX_RADIUS,
-        activeCount = 10,
+        activeCount = 22,
         radius = 17f,
         patrolSpeed = 118f,
         chaseSpeed = 190f,
@@ -180,14 +192,14 @@ enum class AlienTier(
         laserSpeed = 520f,
         primaryColorHex = 0xFF4ADE80,
         accentColorHex = 0xFF84CC16,
-        minimapDotRadius = 2.6f
+        minimapDotRadius = 2.4f
     ),
     HUNTER(
         sectorIndex = 2,
         callsign = "HUNTER",
         minRadius = GameConfig.ZONE_1_MAX_RADIUS,
         maxRadius = GameConfig.ZONE_2_MAX_RADIUS,
-        activeCount = 12,
+        activeCount = 24,
         radius = 22f,
         patrolSpeed = 96f,
         chaseSpeed = 160f,
@@ -196,14 +208,14 @@ enum class AlienTier(
         laserSpeed = 550f,
         primaryColorHex = 0xFFFACC15,
         accentColorHex = 0xFFF59E0B,
-        minimapDotRadius = 2.9f
+        minimapDotRadius = 2.7f
     ),
     DESTROYER(
         sectorIndex = 3,
         callsign = "DESTROYER",
         minRadius = GameConfig.ZONE_2_MAX_RADIUS,
         maxRadius = GameConfig.ZONE_3_MAX_RADIUS,
-        activeCount = 10,
+        activeCount = 20,
         radius = 28f,
         patrolSpeed = 80f,
         chaseSpeed = 135f,
@@ -212,14 +224,14 @@ enum class AlienTier(
         laserSpeed = 580f,
         primaryColorHex = 0xFFFB923C,
         accentColorHex = 0xFFEF4444,
-        minimapDotRadius = 3.3f
+        minimapDotRadius = 3.0f
     ),
     DREADNOUGHT_BOSS(
         sectorIndex = 4,
         callsign = "DREADNOUGHT",
         minRadius = GameConfig.ZONE_3_MAX_RADIUS,
         maxRadius = GameConfig.ZONE_4_MAX_RADIUS,
-        activeCount = 6,
+        activeCount = 14,
         radius = 40f,
         patrolSpeed = 62f,
         chaseSpeed = 110f,
@@ -228,7 +240,7 @@ enum class AlienTier(
         laserSpeed = 620f,
         primaryColorHex = 0xFFC084FC,
         accentColorHex = 0xFFE11D48,
-        minimapDotRadius = 4.2f
+        minimapDotRadius = 3.6f
     );
 
     val maxHp: Float get() = SectorAlienScaling.hpForSector(sectorIndex)
@@ -263,11 +275,190 @@ enum class VantTier(
     )
 }
 
+enum class DroneFormation(
+    val displayName: String,
+    val shortCode: String,
+    val cost: Int,
+    val laserMultiplier: Float = 1.0f,
+    val shieldMultiplier: Float = 1.0f,
+    val hullMultiplier: Float = 1.0f,
+    val speedMultiplier: Float = 1.0f,
+    val passiveShieldRegenPctPerSec: Float = 0.0f,
+    val bonuses: List<String> = emptyList(),
+    val penalties: List<String> = emptyList(),
+    val accentHex: Long = 0xFF00E5FF
+) {
+    NORMAL(
+        displayName = "Normal",
+        shortCode = "NORM",
+        cost = 0,
+        bonuses = listOf("Balanced Escort"),
+        penalties = emptyList(),
+        accentHex = 0xFF94A3B8
+    ),
+    DRILL(
+        displayName = "Drill",
+        shortCode = "DRIL",
+        cost = 1000,
+        laserMultiplier = 1.20f,
+        shieldMultiplier = 0.75f,
+        speedMultiplier = 0.95f,
+        bonuses = listOf("+20% Laser DMG"),
+        penalties = listOf("-25% Max SHD", "-5% Speed"),
+        accentHex = 0xFFFF5252
+    ),
+    HEART(
+        displayName = "Heart",
+        shortCode = "HART",
+        cost = 1200,
+        laserMultiplier = 0.95f,
+        shieldMultiplier = 1.20f,
+        hullMultiplier = 1.20f,
+        bonuses = listOf("+20% Max Hull", "+20% Max SHD"),
+        penalties = listOf("-5% Laser DMG"),
+        accentHex = 0xFFF472B6
+    ),
+    DIAMOND(
+        displayName = "Diamond",
+        shortCode = "DIAM",
+        cost = 1500,
+        hullMultiplier = 0.70f,
+        passiveShieldRegenPctPerSec = 0.015f,
+        bonuses = listOf("+1.5% SHD/s Combat Regen"),
+        penalties = listOf("-30% Max Hull"),
+        accentHex = 0xFF38BDF8
+    ),
+    RING(
+        displayName = "Ring",
+        shortCode = "RING",
+        cost = 1800,
+        laserMultiplier = 0.75f,
+        shieldMultiplier = 1.85f,
+        speedMultiplier = 0.95f,
+        bonuses = listOf("+85% Max SHD"),
+        penalties = listOf("-25% Laser DMG", "-5% Speed"),
+        accentHex = 0xFFA855F7
+    ),
+    WHEEL(
+        displayName = "Wheel",
+        shortCode = "WHEL",
+        cost = 1200,
+        laserMultiplier = 0.80f,
+        speedMultiplier = 1.15f,
+        bonuses = listOf("+15% Speed"),
+        penalties = listOf("-20% Laser DMG"),
+        accentHex = 0xFFFACC15
+    );
+
+    /**
+     * Computes target local offset (forward = +X, right = +Y) and extra facing rotation (rad)
+     * for drone [index] out of [total] around a ship of radius [hullRadius].
+     */
+    fun computeLocalSlot(
+        index: Int,
+        total: Int,
+        hullRadius: Float,
+        elapsedTime: Float
+    ): Triple<Float, Float, Float> {
+        val count = total.coerceAtLeast(1)
+        val base = hullRadius + 22f
+        return when (this) {
+            NORMAL -> {
+                // Classic flanking formation on left/right wings and behind the ship
+                val slots = arrayOf(
+                    Pair(6f, -base),
+                    Pair(6f, base),
+                    Pair(-14f, -(base + 14f)),
+                    Pair(-14f, base + 14f),
+                    Pair(-32f, -(base + 6f)),
+                    Pair(-32f, base + 6f),
+                    Pair(-42f, -15f),
+                    Pair(-42f, 15f)
+                )
+                val (lx, ly) = slots[index % slots.size]
+                Triple(lx, ly, 0f)
+            }
+
+            DRILL -> {
+                // Forward-pointing wedge / arrowhead triangle
+                val slots = arrayOf(
+                    Pair(base + 24f, 0f),
+                    Pair(base + 8f, -18f),
+                    Pair(base + 8f, 18f),
+                    Pair(base - 10f, -34f),
+                    Pair(base - 10f, 34f),
+                    Pair(-14f, -46f),
+                    Pair(-14f, 46f),
+                    Pair(-34f, 0f)
+                )
+                val (lx, ly) = slots[index % slots.size]
+                Triple(lx, ly, 0f)
+            }
+
+            HEART -> {
+                // Parametric heart curve around ship (+X forward point, lobes behind)
+                val t = (index.toFloat() / count) * (2.0 * Math.PI)
+                val sinT = kotlin.math.sin(t)
+                val cosT = kotlin.math.cos(t)
+                // Classic heart: xH = 16 sin^3(t), yH = 13 cos(t) - 5 cos(2t) - 2 cos(3t) - cos(4t)
+                val xH = 16.0 * sinT * sinT * sinT
+                val yH = 13.0 * cosT - 5.0 * kotlin.math.cos(2.0 * t) -
+                    2.0 * kotlin.math.cos(3.0 * t) - kotlin.math.cos(4.0 * t)
+                val scale = (base + 14f) / 16f
+                // Point the heart tip forward (+X), lobes to left/right/rear
+                val lx = (-yH * scale).toFloat() + 6f
+                val ly = (xH * scale).toFloat()
+                Triple(lx, ly, 0f)
+            }
+
+            DIAMOND -> {
+                // Sharp diamond / rhombus perimeter (4 vertices first, then 4 mid-edges)
+                val rF = base + 20f
+                val rS = base + 18f
+                val slots = arrayOf(
+                    Pair(rF, 0f),
+                    Pair(0f, rS),
+                    Pair(-rF, 0f),
+                    Pair(0f, -rS),
+                    Pair(rF * 0.5f, rS * 0.5f),
+                    Pair(-rF * 0.5f, rS * 0.5f),
+                    Pair(-rF * 0.5f, -rS * 0.5f),
+                    Pair(rF * 0.5f, -rS * 0.5f)
+                )
+                val (lx, ly) = slots[index % slots.size]
+                Triple(lx, ly, 0f)
+            }
+
+            RING -> {
+                // Tight protective rotating ring
+                val r = hullRadius + 20f
+                val theta = elapsedTime * 1.5f + index * (2f * Math.PI.toFloat() / count)
+                val lx = kotlin.math.cos(theta) * r
+                val ly = kotlin.math.sin(theta) * r
+                Triple(lx, ly, theta + Math.PI.toFloat() * 0.5f)
+            }
+
+            WHEEL -> {
+                // High-speed spinning wheel formation
+                val r = hullRadius + 30f
+                val theta = -elapsedTime * 3.1f + index * (2f * Math.PI.toFloat() / count)
+                val lx = kotlin.math.cos(theta) * r
+                val ly = kotlin.math.sin(theta) * r
+                Triple(lx, ly, theta - Math.PI.toFloat() * 0.5f)
+            }
+        }
+    }
+}
+
 class VantDrone(
     val id: Int,
     val tier: VantTier,
     val config1Slots: MutableList<EquipmentItem?> = MutableList(tier.slotCount) { null },
-    val config2Slots: MutableList<EquipmentItem?> = MutableList(tier.slotCount) { null }
+    val config2Slots: MutableList<EquipmentItem?> = MutableList(tier.slotCount) { null },
+    var worldX: Float = 0f,
+    var worldY: Float = 0f,
+    var facingRad: Float = 0f,
+    var hasInitializedPosition: Boolean = false
 ) {
     fun slotsForConfig(configNumber: Int): MutableList<EquipmentItem?> =
         if (configNumber == 2) config2Slots else config1Slots
@@ -559,12 +750,13 @@ class PlayerState(
 class AlienEntity(
     val id: Int,
     val tier: AlienTier,
+    val isBoss: Boolean = false,
     var x: Float,
     var y: Float,
     var angleRad: Float,
-    var hp: Float = tier.maxHp,
-    val maxHp: Float = tier.maxHp,
-    val radius: Float = tier.radius,
+    var hp: Float = if (isBoss) tier.maxHp * GameConfig.BOSS_HP_MULTIPLIER else tier.maxHp,
+    val maxHp: Float = if (isBoss) tier.maxHp * GameConfig.BOSS_HP_MULTIPLIER else tier.maxHp,
+    val radius: Float = if (isBoss) tier.radius * GameConfig.BOSS_SIZE_MULTIPLIER else tier.radius,
     var patrolTargetX: Float,
     var patrolTargetY: Float,
     var isAggro: Boolean = false,
@@ -572,9 +764,10 @@ class AlienEntity(
     var hitFlash: Float = 0f,
     var pulsePhase: Float = 0f
 ) {
-    val callsign: String get() = tier.callsign
-    val rewardCredits: Int get() = tier.rewardCredits
-    val rewardXp: Int get() = tier.rewardXp
+    val callsign: String get() = if (isBoss) "BOSS ${tier.callsign}" else tier.callsign
+    val laserDamage: Float get() = if (isBoss) tier.laserDamage * GameConfig.BOSS_DAMAGE_MULTIPLIER else tier.laserDamage
+    val rewardCredits: Int get() = if (isBoss) tier.rewardCredits * GameConfig.BOSS_REWARD_MULTIPLIER else tier.rewardCredits
+    val rewardXp: Int get() = if (isBoss) tier.rewardXp * GameConfig.BOSS_REWARD_MULTIPLIER else tier.rewardXp
 }
 
 class LootBoxEntity(
@@ -658,6 +851,8 @@ data class SaveState(
     val config2LaserIds: List<Int?>,
     val config2ShieldIds: List<Int?>,
     val ownedVants: List<SavedVant> = emptyList(),
+    val ownedFormations: Set<DroneFormation> = setOf(DroneFormation.NORMAL),
+    val activeFormation: DroneFormation = DroneFormation.NORMAL,
     val equippedSectorChipId: Int?,
     val currentMissionIndex: Int,
     val currentMissionProgress: Int
@@ -682,6 +877,8 @@ data class EquipmentSnapshot(
     val vants: List<VantSnapshot> = emptyList(),
     val flaxVantCount: Int = 0,
     val irisVantCount: Int = 0,
+    val ownedFormations: Set<DroneFormation> = setOf(DroneFormation.NORMAL),
+    val activeFormation: DroneFormation = DroneFormation.NORMAL,
     val inventory: List<EquipmentItem> = emptyList(),
     val ownedItemCounts: Map<EquipmentItemId, Int> = emptyMap(),
     val hasAnyReadyFusion: Boolean = false,
@@ -699,6 +896,13 @@ data class HudSnapshot(
     val playerXpToNext: Int = GameConfig.xpRequiredForLevel(1),
     val activeConfig: Int = 1,
     val activeShipClass: ShipClass = ShipClass.INTERCEPTOR,
+    val activeFormation: DroneFormation = DroneFormation.NORMAL,
+    val formationCooldownRemaining: Float = 0f,
+    val ownedFormationCount: Int = 1,
+    val isAutopilotActive: Boolean = false,
+    val autopilotTargetX: Int = 0,
+    val autopilotTargetY: Int = 0,
+    val isTacticalMapOpen: Boolean = false,
     val playerHp: Int = ShipClass.INTERCEPTOR.baseHull.toInt(),
     val playerMaxHp: Int = ShipClass.INTERCEPTOR.baseHull.toInt(),
     val playerShield: Int = (GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus).toInt(),
