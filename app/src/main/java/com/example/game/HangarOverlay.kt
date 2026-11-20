@@ -956,6 +956,12 @@ private fun VantsTabContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                val totalOwnedVants = equipment.flaxVantCount + equipment.irisVantCount
+                val reserveSuffix = if (totalOwnedVants > GameConfig.MAX_VANTS) {
+                    " • +${totalOwnedVants - GameConfig.MAX_VANTS} RES"
+                } else {
+                    ""
+                }
                 Text(
                     text = "VANTS: ${equipment.vants.size} / ${GameConfig.MAX_VANTS}",
                     style = MaterialTheme.typography.labelLarge,
@@ -964,7 +970,7 @@ private fun VantsTabContent(
                     softWrap = false
                 )
                 Text(
-                    text = "FLAX: ${equipment.flaxVantCount} • IRIS: ${equipment.irisVantCount} • CFG ${equipment.activeConfig} • ${equipment.activeFormation.displayName}",
+                    text = "FLAX: ${equipment.flaxVantCount} • IRIS: ${equipment.irisVantCount}$reserveSuffix • CFG ${equipment.activeConfig} • ${equipment.activeFormation.displayName}",
                     style = MaterialTheme.typography.labelSmall,
                     color = AmberCredits,
                     maxLines = 1,
@@ -1470,10 +1476,13 @@ private fun ShopTabContent(
                     }
                 }
 
-                // 4th Base Card: Flax VANT (600 CR, disabled at 8/8 owned VANTs)
-                val vantCount = equipment.vants.size
-                val vantAtCap = vantCount >= GameConfig.MAX_VANTS
-                val canBuyVant = !vantAtCap && credits >= GameConfig.FLAX_VANT_COST
+                // 4th Base Card: Flax VANT (600 CR; allowed while irisCount < 8 && total < 9 for 8th Iris fusion)
+                val irisCount = equipment.irisVantCount
+                val flaxCount = equipment.flaxVantCount
+                val totalOwnedVants = irisCount + flaxCount
+                val atMaxIris = irisCount >= GameConfig.MAX_VANTS
+                val atFusionCap = !atMaxIris && totalOwnedVants >= GameConfig.MAX_OWNED_VANTS_FOR_FUSION
+                val canBuyVant = !atMaxIris && !atFusionCap && credits >= GameConfig.FLAX_VANT_COST
                 Column(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
@@ -1497,7 +1506,11 @@ private fun ShopTabContent(
                                 softWrap = false
                             )
                             Text(
-                                text = "1 Slot • $vantCount/${GameConfig.MAX_VANTS}",
+                                text = if (totalOwnedVants > GameConfig.MAX_VANTS) {
+                                    "1 Slot • ${equipment.vants.size}/${GameConfig.MAX_VANTS} (+1 RES)"
+                                } else {
+                                    "1 Slot • $totalOwnedVants/${GameConfig.MAX_VANTS}"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CyanLaser,
                                 maxLines = 1,
@@ -1522,10 +1535,10 @@ private fun ShopTabContent(
                             .testTag("shop_buy_flax_vant")
                     ) {
                         Text(
-                            text = if (vantAtCap) {
-                                stringResource(R.string.hangar_vant_max)
-                            } else {
-                                "${stringResource(R.string.hangar_buy)} ${GameConfig.FLAX_VANT_COST} CR"
+                            text = when {
+                                atMaxIris -> stringResource(R.string.hangar_vant_max)
+                                atFusionCap -> stringResource(R.string.hangar_vant_fuse_required)
+                                else -> "${stringResource(R.string.hangar_buy)} ${GameConfig.FLAX_VANT_COST} CR"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,

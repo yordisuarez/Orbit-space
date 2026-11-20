@@ -19,6 +19,7 @@ object GameConfig {
 
     // VANT (Drone) limits, pricing & formations
     const val MAX_VANTS = 8
+    const val MAX_OWNED_VANTS_FOR_FUSION = 9
     const val FLAX_VANT_COST = 600
     const val FORMATION_SWITCH_COOLDOWN_SEC = 3.0f
 
@@ -33,6 +34,25 @@ object GameConfig {
     const val AUTOPILOT_STOP_RADIUS = 60f
     const val AUTOPILOT_MAX_TARGET_RADIUS = 19800f
     const val HUD_MINIMAP_VIEW_RADIUS = 4500f
+
+    // Jump Gate Portal & Classic Square Map (MAP X-1)
+    const val MAIN_JUMP_GATE_X = 220f
+    const val MAIN_JUMP_GATE_Y = 0f
+    const val MAP_X1_SIZE = 14000f
+    const val MAP_X1_SAFE_ZONE_X = 1200f
+    const val MAP_X1_SAFE_ZONE_Y = 1200f
+    const val MAP_X1_SAFE_ZONE_RADIUS = 500f
+    const val MAP_X1_SPAWN_X = 1200f
+    const val MAP_X1_SPAWN_Y = 1350f
+    const val MAP_X1_AUTOPILOT_MIN = 200f
+    const val MAP_X1_AUTOPILOT_MAX = 13800f
+    const val MAP_X1_RADIATION_OUTER_BUFFER = 360f
+    const val MAP_X1_BORDER_RADIATION_DPS = 58f
+    const val MAP_X1_STAR_COUNT = 1500
+    const val MAP_X1_NEBULA_COUNT = 28
+    const val MAP_X1_BONUS_BOX_COUNT = 50
+    const val JUMP_GATE_INTERACT_RADIUS = 120f
+    const val WARP_FLASH_DURATION_SEC = 0.4f
 
     // Sector 1 Alien Base Stats & 2.5x Exponential Scaling
     const val SECTOR_BASE_ALIEN_HP = 120.0
@@ -130,6 +150,14 @@ enum class ShipClass(
         primaryColorHex = 0xFF064E3B,
         accentColorHex = 0xFF34D399
     )
+}
+
+enum class GameMap(
+    val displayName: String,
+    val gateLabel: String
+) {
+    MAIN_MAP(displayName = "MAIN MAP", gateLabel = "GATE: X-1"),
+    MAP_X1(displayName = "MAP X-1", gateLabel = "GATE: BASE")
 }
 
 enum class SpaceZone(
@@ -248,6 +276,60 @@ enum class AlienTier(
     val laserDamage: Float get() = SectorAlienScaling.damageForSector(sectorIndex)
     val rewardCredits: Int get() = SectorAlienScaling.creditsForSector(sectorIndex)
     val rewardXp: Int get() = SectorAlienScaling.xpForSector(sectorIndex)
+}
+
+enum class PilotCompany(
+    val id: String,
+    val displayName: String,
+    val tag: String,
+    val lore: String,
+    val primaryColorHex: Long,
+    val darkBgColorHex: Long,
+    val rgbInt: Int
+) {
+    SOLARIS(
+        id = "solaris",
+        displayName = "SOLARIS",
+        tag = "SOL",
+        lore = "Aggressive mining & combat syndicate.",
+        primaryColorHex = 0xFFFF3B5C,
+        darkBgColorHex = 0xFF240912,
+        rgbInt = 0xFF3B5C
+    ),
+    AETHER(
+        id = "aether",
+        displayName = "AETHER",
+        tag = "AET",
+        lore = "High-tech tactical defense corporation.",
+        primaryColorHex = 0xFF00E5FF,
+        darkBgColorHex = 0xFF061E2B,
+        rgbInt = 0x00E5FF
+    ),
+    VERDANT(
+        id = "verdant",
+        displayName = "VERDANT",
+        tag = "VER",
+        lore = "Wealthy trade & exploration empire.",
+        primaryColorHex = 0xFF22C55E,
+        darkBgColorHex = 0xFF072416,
+        rgbInt = 0x22C55E
+    );
+
+    companion object {
+        fun fromId(raw: String?): PilotCompany? {
+            if (raw.isNullOrBlank()) return null
+            return entries.firstOrNull {
+                it.id.equals(raw, ignoreCase = true) || it.name.equals(raw, ignoreCase = true)
+            }
+        }
+    }
+}
+
+enum class AppScreenStage {
+    INTRO,
+    ONBOARDING_COMPANY,
+    ONBOARDING_NAME,
+    GAMEPLAY
 }
 
 enum class VantTier(
@@ -758,7 +840,8 @@ class PlayerState(
     var radiationTickTimer: Float = 0f,
     var timeSinceDamaged: Float = GameConfig.SHIELD_REGEN_DELAY,
     var isAlive: Boolean = true,
-    var thrusterPulse: Float = 0f
+    var thrusterPulse: Float = 0f,
+    var thrustFactor: Float = 0f
 )
 
 class AlienEntity(
@@ -869,7 +952,9 @@ data class SaveState(
     val activeFormation: DroneFormation = DroneFormation.NORMAL,
     val equippedSectorChipId: Int?,
     val currentMissionIndex: Int,
-    val currentMissionProgress: Int
+    val currentMissionProgress: Int,
+    val pilotName: String? = null,
+    val companyId: String? = null
 )
 
 data class MissionSnapshot(
@@ -923,6 +1008,11 @@ data class HudSnapshot(
     val playerMaxShield: Int = (GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus).toInt(),
     val coordX: Int = 0,
     val coordY: Int = 0,
+    val activeMap: GameMap = GameMap.MAIN_MAP,
+    val isNearJumpGate: Boolean = false,
+    val jumpGateLabel: String = "GATE: X-1",
+    val pilotName: String? = null,
+    val pilotCompany: PilotCompany? = null,
     val currentZone: SpaceZone = SpaceZone.SAFE_ZONE,
     val isAutoFireEnabled: Boolean = false,
     val rocketCooldownRemaining: Float = 0f,

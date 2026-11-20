@@ -154,6 +154,14 @@ fun SpaceCombatScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.align(Alignment.BottomEnd)
             ) {
+                if (hud.isNearJumpGate) {
+                    JumpGateButton(
+                        gateLabel = hud.jumpGateLabel,
+                        onJump = { viewModel.triggerJumpGate() },
+                        modifier = Modifier.padding(bottom = 14.dp)
+                    )
+                }
+
                 RocketFireButton(
                     cooldownRemaining = hud.rocketCooldownRemaining,
                     inSafeZone = hud.inSafeZone,

@@ -26,8 +26,21 @@ class SpaceGameEngine(
     val shockwaves = mutableListOf<ShockwaveRing>()
     val popups = mutableListOf<FloatingPopup>()
 
-    val stars: List<Star> = generateCircularStars()
-    val nebulae: List<NebulaCloud> = generateCircularNebulae()
+    private val mainStars: List<Star> = generateCircularStars()
+    private val x1Stars: List<Star> = generateSquareX1Stars()
+    private val mainNebulae: List<NebulaCloud> = generateCircularNebulae()
+    private val x1Nebulae: List<NebulaCloud> = generateSquareX1Nebulae()
+
+    val stars: List<Star>
+        get() = if (activeMap == GameMap.MAP_X1) x1Stars else mainStars
+
+    val nebulae: List<NebulaCloud>
+        get() = if (activeMap == GameMap.MAP_X1) x1Nebulae else mainNebulae
+
+    var activeMap: GameMap = GameMap.MAIN_MAP
+        private set
+    var warpFlashTimer: Float = 0f
+        private set
 
     // Owned Ship Classes & Active Ship Class
     val ownedShipClasses: MutableSet<ShipClass> = mutableSetOf(ShipClass.INTERCEPTOR)
@@ -208,7 +221,7 @@ class SpaceGameEngine(
         }
 
         ownedVants.clear()
-        for (savedVant in state.ownedVants.take(GameConfig.MAX_VANTS)) {
+        for (savedVant in state.ownedVants.take(GameConfig.MAX_OWNED_VANTS_FOR_FUSION)) {
             val drone = VantDrone(id = savedVant.id, tier = savedVant.tier)
             for (i in drone.config1Slots.indices) {
                 val found = savedVant.config1SlotIds.getOrNull(i)?.let { byId[it] }
@@ -222,6 +235,7 @@ class SpaceGameEngine(
             }
             ownedVants.add(drone)
         }
+        clearReserveVantSlots()
         nextVantId = max(
             state.nextVantId,
             (ownedVants.maxOfOrNull { it.id } ?: 0) + 1
@@ -307,6 +321,8 @@ class SpaceGameEngine(
         }
         recalculateShipStats(refillVitals = true)
 
+        activeMap = GameMap.MAIN_MAP
+        warpFlashTimer = 0f
         player.x = 0f
         player.y = 0f
         player.angleRad = -PI.toFloat() * 0.5f
@@ -336,6 +352,14 @@ class SpaceGameEngine(
         autopilotTargetY = null
         snapVantsToFormation()
 
+        populateActiveMapEntities()
+
+        if (triggerSave) {
+            requestSave()
+        }
+    }
+
+    private fun populateActiveMapEntities() {
         lasers.clear()
         rockets.clear()
         particles.clear()
@@ -344,24 +368,125 @@ class SpaceGameEngine(
         aliens.clear()
         lootBoxes.clear()
 
-        for (tier in AlienTier.entries) {
-            repeat(tier.activeCount) {
-                spawnAlienForTier(tier, minDistanceFromPlayer = 360f)
+        if (activeMap == GameMap.MAP_X1) {
+            // Classic mix of Scouts, Hunters, and Destroyers with existing 20% BOSS chance
+            repeat(16) { spawnAlienForTier(AlienTier.SCOUT, minDistanceFromPlayer = 680f) }
+            repeat(14) { spawnAlienForTier(AlienTier.HUNTER, minDistanceFromPlayer = 720f) }
+            repeat(10) { spawnAlienForTier(AlienTier.DESTROYER, minDistanceFromPlayer = 760f) }
+            repeat(GameConfig.MAP_X1_BONUS_BOX_COUNT) {
+                spawnBonusBox()
+            }
+        } else {
+            for (tier in AlienTier.entries) {
+                repeat(tier.activeCount) {
+                    spawnAlienForTier(tier, minDistanceFromPlayer = 360f)
+                }
+            }
+            repeat(GameConfig.BONUS_BOX_COUNT) {
+                spawnBonusBox()
             }
         }
-        repeat(GameConfig.BONUS_BOX_COUNT) {
-            spawnBonusBox()
-        }
+    }
 
-        if (triggerSave) {
-            requestSave()
+    fun activeSafeZoneCenter(): Pair<Float, Float> = if (activeMap == GameMap.MAP_X1) {
+        Pair(GameConfig.MAP_X1_SAFE_ZONE_X, GameConfig.MAP_X1_SAFE_ZONE_Y)
+    } else {
+        Pair(0f, 0f)
+    }
+
+    fun activeSafeZoneRadius(): Float = if (activeMap == GameMap.MAP_X1) {
+        GameConfig.MAP_X1_SAFE_ZONE_RADIUS
+    } else {
+        GameConfig.SAFE_ZONE_RADIUS
+    }
+
+    fun activeJumpGatePosition(): Pair<Float, Float> = if (activeMap == GameMap.MAP_X1) {
+        Pair(GameConfig.MAP_X1_SAFE_ZONE_X, GameConfig.MAP_X1_SAFE_ZONE_Y)
+    } else {
+        Pair(GameConfig.MAIN_JUMP_GATE_X, GameConfig.MAIN_JUMP_GATE_Y)
+    }
+
+    fun isPointInActiveSafeZone(x: Float, y: Float): Boolean {
+        val (sx, sy) = activeSafeZoneCenter()
+        return hypot(x - sx, y - sy) <= activeSafeZoneRadius()
+    }
+
+    fun isPlayerNearJumpGate(): Boolean {
+        if (!player.isAlive) return false
+        val (gx, gy) = activeJumpGatePosition()
+        return hypot(player.x - gx, player.y - gy) <= GameConfig.JUMP_GATE_INTERACT_RADIUS
+    }
+
+    fun triggerJumpGate(): Boolean {
+        if (!player.isAlive || isPaused || isHangarOpen) return false
+        if (!isPlayerNearJumpGate()) return false
+
+        // Cancel Autopilot, target lock, auto-fire, and close Tactical Map
+        autopilotTargetX = null
+        autopilotTargetY = null
+        lockedAlienId = null
+        player.isAutoFireEnabled = false
+        isTacticalMapOpen = false
+
+        activeMap = if (activeMap == GameMap.MAIN_MAP) GameMap.MAP_X1 else GameMap.MAIN_MAP
+        warpFlashTimer = GameConfig.WARP_FLASH_DURATION_SEC
+
+        if (activeMap == GameMap.MAP_X1) {
+            player.x = GameConfig.MAP_X1_SPAWN_X
+            player.y = GameConfig.MAP_X1_SPAWN_Y
+            player.angleRad = 0.785398f // Facing diagonally out into X-1
+        } else {
+            player.x = 0f
+            player.y = 0f
+            player.angleRad = -PI.toFloat() * 0.5f
         }
+        player.isMoving = false
+        player.thrustFactor = 0f
+        player.currentZone = SpaceZone.SAFE_ZONE
+        player.inSafeZone = true
+        player.inRadiationWarning = false
+        player.isTakingZoneRadiation = false
+        player.requiredChipWarning = null
+        player.radiationTickTimer = 0f
+
+        cameraX = player.x
+        cameraY = player.y
+        snapVantsToFormation()
+        populateActiveMapEntities()
+
+        shockwaves.add(
+            ShockwaveRing(
+                x = player.x,
+                y = player.y,
+                maxRadius = 150f,
+                life = 0.45f,
+                maxLife = 0.45f,
+                colorHex = 0xFF00E5FF
+            )
+        )
+        popups.add(
+            FloatingPopup(
+                x = player.x,
+                y = player.y - activeShipClass.hullRadius - 32f,
+                text = "JUMPED TO ${activeMap.displayName}",
+                life = 1.6f,
+                maxLife = 1.6f,
+                colorRgb = 0x00E5FF,
+                textSize = 15f
+            )
+        )
+        return true
     }
 
     fun relaunchShip() {
         recalculateShipStats(refillVitals = true)
-        player.x = 0f
-        player.y = 0f
+        if (activeMap == GameMap.MAP_X1) {
+            player.x = GameConfig.MAP_X1_SPAWN_X
+            player.y = GameConfig.MAP_X1_SPAWN_Y
+        } else {
+            player.x = 0f
+            player.y = 0f
+        }
         player.currentZone = SpaceZone.SAFE_ZONE
         player.inSafeZone = true
         player.inRadiationWarning = false
@@ -501,16 +626,21 @@ class SpaceGameEngine(
 
     fun setAutopilotTarget(worldX: Float, worldY: Float) {
         if (!player.isAlive) return
-        val dist = hypot(worldX, worldY)
         val clampedX: Float
         val clampedY: Float
-        if (dist > GameConfig.AUTOPILOT_MAX_TARGET_RADIUS && dist > 0.001f) {
-            val scale = GameConfig.AUTOPILOT_MAX_TARGET_RADIUS / dist
-            clampedX = worldX * scale
-            clampedY = worldY * scale
+        if (activeMap == GameMap.MAP_X1) {
+            clampedX = worldX.coerceIn(GameConfig.MAP_X1_AUTOPILOT_MIN, GameConfig.MAP_X1_AUTOPILOT_MAX)
+            clampedY = worldY.coerceIn(GameConfig.MAP_X1_AUTOPILOT_MIN, GameConfig.MAP_X1_AUTOPILOT_MAX)
         } else {
-            clampedX = worldX
-            clampedY = worldY
+            val dist = hypot(worldX, worldY)
+            if (dist > GameConfig.AUTOPILOT_MAX_TARGET_RADIUS && dist > 0.001f) {
+                val scale = GameConfig.AUTOPILOT_MAX_TARGET_RADIUS / dist
+                clampedX = worldX * scale
+                clampedY = worldY * scale
+            } else {
+                clampedX = worldX
+                clampedY = worldY
+            }
         }
         autopilotTargetX = clampedX
         autopilotTargetY = clampedY
@@ -637,11 +767,40 @@ class SpaceGameEngine(
     private fun isVantCompatibleItem(type: EquipmentItemId): Boolean =
         type.category == EquipmentCategory.LASER || type.category == EquipmentCategory.SHIELD_GENERATOR
 
+    /**
+     * Returns up to 8 active VANTs for flight, rendering, stats, and slot equipping,
+     * strictly prioritizing Iris drones first and then Flax drones (stable by ID).
+     */
+    fun getActiveVants(): List<VantDrone> {
+        if (ownedVants.isEmpty()) return emptyList()
+        return ownedVants
+            .sortedWith(compareBy<VantDrone>({ if (it.tier == VantTier.IRIS) 0 else 1 }, { it.id }))
+            .take(GameConfig.MAX_VANTS)
+    }
+
+    fun canBuyFlaxVant(): Boolean {
+        val irisCount = ownedVants.count { it.tier == VantTier.IRIS }
+        val totalOwned = ownedVants.size
+        return irisCount < GameConfig.MAX_VANTS && totalOwned < GameConfig.MAX_OWNED_VANTS_FOR_FUSION
+    }
+
+    private fun clearReserveVantSlots() {
+        if (ownedVants.size <= GameConfig.MAX_VANTS) return
+        val activeIds = getActiveVants().map { it.id }.toSet()
+        for (vant in ownedVants) {
+            if (vant.id !in activeIds) {
+                for (i in vant.config1Slots.indices) vant.config1Slots[i] = null
+                for (i in vant.config2Slots.indices) vant.config2Slots[i] = null
+            }
+        }
+    }
+
     fun buyFlaxVant(): Boolean {
-        if (ownedVants.size >= GameConfig.MAX_VANTS) return false
+        if (!canBuyFlaxVant()) return false
         if (credits < GameConfig.FLAX_VANT_COST) return false
         credits -= GameConfig.FLAX_VANT_COST
         ownedVants.add(VantDrone(id = nextVantId++, tier = VantTier.FLAX))
+        clearReserveVantSlots()
         requestSave()
         return true
     }
@@ -663,13 +822,14 @@ class SpaceGameEngine(
         ownedVants.removeAll { it.id in consumeIds }
 
         ownedVants.add(VantDrone(id = nextVantId++, tier = VantTier.IRIS))
+        clearReserveVantSlots()
         recalculateShipStats(refillVitals = false)
         requestSave()
         return true
     }
 
     fun equipItemToVantSlot(vantId: Int, slotIndex: Int, instanceId: Int? = null): Boolean {
-        val vant = ownedVants.firstOrNull { it.id == vantId } ?: return false
+        val vant = getActiveVants().firstOrNull { it.id == vantId } ?: return false
         val slots = vant.slotsForConfig(activeConfig)
         if (slotIndex !in slots.indices || slots[slotIndex] != null) return false
 
@@ -691,7 +851,7 @@ class SpaceGameEngine(
             it.instanceId == instanceId && isVantCompatibleItem(it.type)
         } ?: return false
 
-        for (vant in ownedVants) {
+        for (vant in getActiveVants()) {
             val slots = vant.slotsForConfig(activeConfig)
             val emptyIdx = slots.indexOfFirst { it == null }
             if (emptyIdx != -1) {
@@ -705,7 +865,7 @@ class SpaceGameEngine(
     }
 
     fun unequipVantSlot(vantId: Int, slotIndex: Int): Boolean {
-        val vant = ownedVants.firstOrNull { it.id == vantId } ?: return false
+        val vant = getActiveVants().firstOrNull { it.id == vantId } ?: return false
         val slots = vant.slotsForConfig(activeConfig)
         if (slotIndex !in slots.indices || slots[slotIndex] == null) return false
         slots[slotIndex] = null
@@ -725,7 +885,7 @@ class SpaceGameEngine(
         for (item in shieldSlots) {
             if (item != null) equippedIds.add(item.instanceId)
         }
-        for (vant in ownedVants) {
+        for (vant in getActiveVants()) {
             for (item in vant.slotsForConfig(activeConfig)) {
                 if (item != null) equippedIds.add(item.instanceId)
             }
@@ -773,10 +933,11 @@ class SpaceGameEngine(
         if (matching.size < 2) return false
 
         // Prefer consuming unequipped inventory items first so equipped ship & VANT slots stay intact
+        val activeVants = getActiveVants()
         val activeEquippedIds = HashSet<Int>()
         for (item in laserSlots) if (item != null) activeEquippedIds.add(item.instanceId)
         for (item in shieldSlots) if (item != null) activeEquippedIds.add(item.instanceId)
-        for (vant in ownedVants) {
+        for (vant in activeVants) {
             for (item in vant.slotsForConfig(activeConfig)) {
                 if (item != null) activeEquippedIds.add(item.instanceId)
             }
@@ -789,7 +950,7 @@ class SpaceGameEngine(
         val inactiveEquippedIds = HashSet<Int>()
         for (item in inactiveLasers) if (item != null) inactiveEquippedIds.add(item.instanceId)
         for (item in inactiveShields) if (item != null) inactiveEquippedIds.add(item.instanceId)
-        for (vant in ownedVants) {
+        for (vant in activeVants) {
             for (item in vant.slotsForConfig(inactiveConfig)) {
                 if (item != null) inactiveEquippedIds.add(item.instanceId)
             }
@@ -810,7 +971,7 @@ class SpaceGameEngine(
         val vacatedShieldIndex = shieldSlots.indexOfFirst { it != null && it.instanceId in consumeIds }
         var vacatedVant: VantDrone? = null
         var vacatedVantSlotIdx = -1
-        for (vant in ownedVants) {
+        for (vant in activeVants) {
             val idx = vant.slotsForConfig(activeConfig).indexOfFirst { it != null && it.instanceId in consumeIds }
             if (idx != -1) {
                 vacatedVant = vant
@@ -949,8 +1110,8 @@ class SpaceGameEngine(
             if (slot != null) bonusShield += slot.type.shieldBonus
         }
 
-        // Include all Lasers and Shields equipped inside owned VANT drones for the active Config
-        for (vant in ownedVants) {
+        // Include all Lasers and Shields equipped inside up to 8 active VANT drones for the active Config
+        for (vant in getActiveVants()) {
             for (slot in vant.slotsForConfig(activeConfig)) {
                 if (slot != null) {
                     bonusDamage += slot.type.damageBonus
@@ -1161,6 +1322,9 @@ class SpaceGameEngine(
         if (screenShake > 0f) {
             screenShake = max(0f, screenShake - dt * 28f)
         }
+        if (warpFlashTimer > 0f) {
+            warpFlashTimer = max(0f, warpFlashTimer - dt)
+        }
 
         if (player.isAlive) {
             updatePlayer(dt)
@@ -1206,12 +1370,15 @@ class SpaceGameEngine(
             autopilotTargetX = autopilotTargetX?.toInt() ?: 0,
             autopilotTargetY = autopilotTargetY?.toInt() ?: 0,
             isTacticalMapOpen = isTacticalMapOpen,
-            playerHp = player.hp.toInt().coerceAtLeast(0),
-            playerMaxHp = player.maxHp.toInt(),
-            playerShield = player.shield.toInt().coerceAtLeast(0),
-            playerMaxShield = player.maxShield.toInt(),
+            playerHp = player.hp.roundToInt().coerceAtLeast(0),
+            playerMaxHp = player.maxHp.roundToInt().coerceAtLeast(1),
+            playerShield = player.shield.roundToInt().coerceAtLeast(0),
+            playerMaxShield = player.maxShield.roundToInt().coerceAtLeast(1),
             coordX = player.x.toInt(),
             coordY = player.y.toInt(),
+            activeMap = activeMap,
+            isNearJumpGate = isPlayerNearJumpGate(),
+            jumpGateLabel = activeMap.gateLabel,
             currentZone = player.currentZone,
             isAutoFireEnabled = player.isAutoFireEnabled,
             rocketCooldownRemaining = player.rocketCooldown,
@@ -1233,7 +1400,7 @@ class SpaceGameEngine(
                 equippedSectorChip = equippedSectorChip,
                 laserSlots = laserSlots.toList(),
                 shieldSlots = shieldSlots.toList(),
-                vants = ownedVants.map { vant ->
+                vants = getActiveVants().map { vant ->
                     VantSnapshot(
                         id = vant.id,
                         tier = vant.tier,
@@ -1272,6 +1439,7 @@ class SpaceGameEngine(
         }
 
         var movementAngle: Float? = null
+        var targetThrust = 0f
         val mag = hypot(moveInputX, moveInputY)
         if (mag > GameConfig.JOYSTICK_DEADZONE) {
             // Instant manual override cancels autopilot
@@ -1283,7 +1451,7 @@ class SpaceGameEngine(
             player.x += dirX * player.speed * dt
             player.y += dirY * player.speed * dt
             player.isMoving = true
-            player.thrusterPulse += dt * 18f
+            targetThrust = mag.coerceIn(0.45f, 1f)
         } else if (autopilotTargetX != null && autopilotTargetY != null) {
             val tx = autopilotTargetX!!
             val ty = autopilotTargetY!!
@@ -1294,17 +1462,23 @@ class SpaceGameEngine(
                 autopilotTargetX = null
                 autopilotTargetY = null
                 player.isMoving = false
+                targetThrust = 0f
             } else {
                 movementAngle = atan2(dy, dx)
                 val stepDist = min(dist, player.speed * dt)
                 player.x += (dx / dist) * stepDist
                 player.y += (dy / dist) * stepDist
                 player.isMoving = true
-                player.thrusterPulse += dt * 18f
+                targetThrust = 1f
             }
         } else {
             player.isMoving = false
+            targetThrust = 0f
         }
+        val thrustLerp = 1f - exp(-10f * dt)
+        player.thrustFactor += (targetThrust - player.thrustFactor) * thrustLerp
+        if (player.thrustFactor < 0.005f) player.thrustFactor = 0f
+        player.thrusterPulse += dt * (8f + 18f * player.thrustFactor)
 
         // Combat Facing Override: decouple ship facing from movement velocity while attacking a locked alien
         val locked = getLockedAlien()
@@ -1320,35 +1494,69 @@ class SpaceGameEngine(
             )
         }
 
-        val maxPlayerRadius = GameConfig.MAP_RADIUS - GameConfig.BORDER_PADDING
-        val distFromCenter = hypot(player.x, player.y)
-        if (distFromCenter > maxPlayerRadius && distFromCenter > 0.001f) {
-            val scale = maxPlayerRadius / distFromCenter
-            player.x *= scale
-            player.y *= scale
-        }
+        if (activeMap == GameMap.MAP_X1) {
+            val minOuter = -GameConfig.MAP_X1_RADIATION_OUTER_BUFFER
+            val maxOuter = GameConfig.MAP_X1_SIZE + GameConfig.MAP_X1_RADIATION_OUTER_BUFFER
+            player.x = player.x.coerceIn(minOuter, maxOuter)
+            player.y = player.y.coerceIn(minOuter, maxOuter)
 
-        val clampedDist = min(distFromCenter, maxPlayerRadius)
-        player.currentZone = resolveZone(clampedDist)
-        player.inSafeZone = player.currentZone == SpaceZone.SAFE_ZONE
+            val inX1Safe = isPointInActiveSafeZone(player.x, player.y)
+            player.inSafeZone = inX1Safe
+            player.currentZone = if (inX1Safe) SpaceZone.SAFE_ZONE else SpaceZone.ZONE_1_ALPHA
 
-        // Sector Chip radiation check
-        val zoneReqTier = player.currentZone.requiredChipTier
-        val exposedToZoneRad = !player.inSafeZone && zoneReqTier > equippedChipTier
-        player.isTakingZoneRadiation = exposedToZoneRad
-        player.requiredChipWarning = if (exposedToZoneRad) player.currentZone.requiredChipName else null
-        player.inRadiationWarning = exposedToZoneRad ||
-            (GameConfig.MAP_RADIUS - clampedDist) < GameConfig.RADIATION_WARNING_DISTANCE
+            val outsideSquare = player.x < 0f ||
+                player.x > GameConfig.MAP_X1_SIZE ||
+                player.y < 0f ||
+                player.y > GameConfig.MAP_X1_SIZE
+            val distToBorder = min(
+                min(player.x, GameConfig.MAP_X1_SIZE - player.x),
+                min(player.y, GameConfig.MAP_X1_SIZE - player.y)
+            )
+            player.isTakingZoneRadiation = !inX1Safe && outsideSquare
+            player.requiredChipWarning = null
+            player.inRadiationWarning = outsideSquare || distToBorder < GameConfig.RADIATION_WARNING_DISTANCE
 
-        if (exposedToZoneRad && player.isAlive) {
-            player.radiationTickTimer += dt
-            if (player.radiationTickTimer >= GameConfig.RADIATION_TICK_INTERVAL) {
-                player.radiationTickTimer -= GameConfig.RADIATION_TICK_INTERVAL
-                val radDmg = player.currentZone.radiationDps * GameConfig.RADIATION_TICK_INTERVAL
-                applyDamageToPlayer(radDmg, player.x, player.y, isRadiation = true)
+            if (outsideSquare && !inX1Safe && player.isAlive) {
+                player.radiationTickTimer += dt
+                if (player.radiationTickTimer >= GameConfig.RADIATION_TICK_INTERVAL) {
+                    player.radiationTickTimer -= GameConfig.RADIATION_TICK_INTERVAL
+                    val radDmg = GameConfig.MAP_X1_BORDER_RADIATION_DPS * GameConfig.RADIATION_TICK_INTERVAL
+                    applyDamageToPlayer(radDmg, player.x, player.y, isRadiation = true)
+                }
+            } else {
+                player.radiationTickTimer = 0f
             }
         } else {
-            player.radiationTickTimer = 0f
+            val maxPlayerRadius = GameConfig.MAP_RADIUS - GameConfig.BORDER_PADDING
+            val distFromCenter = hypot(player.x, player.y)
+            if (distFromCenter > maxPlayerRadius && distFromCenter > 0.001f) {
+                val scale = maxPlayerRadius / distFromCenter
+                player.x *= scale
+                player.y *= scale
+            }
+
+            val clampedDist = min(distFromCenter, maxPlayerRadius)
+            player.currentZone = resolveZone(clampedDist)
+            player.inSafeZone = player.currentZone == SpaceZone.SAFE_ZONE
+
+            // Sector Chip radiation check
+            val zoneReqTier = player.currentZone.requiredChipTier
+            val exposedToZoneRad = !player.inSafeZone && zoneReqTier > equippedChipTier
+            player.isTakingZoneRadiation = exposedToZoneRad
+            player.requiredChipWarning = if (exposedToZoneRad) player.currentZone.requiredChipName else null
+            player.inRadiationWarning = exposedToZoneRad ||
+                (GameConfig.MAP_RADIUS - clampedDist) < GameConfig.RADIATION_WARNING_DISTANCE
+
+            if (exposedToZoneRad && player.isAlive) {
+                player.radiationTickTimer += dt
+                if (player.radiationTickTimer >= GameConfig.RADIATION_TICK_INTERVAL) {
+                    player.radiationTickTimer -= GameConfig.RADIATION_TICK_INTERVAL
+                    val radDmg = player.currentZone.radiationDps * GameConfig.RADIATION_TICK_INTERVAL
+                    applyDamageToPlayer(radDmg, player.x, player.y, isRadiation = true)
+                }
+            } else {
+                player.radiationTickTimer = 0f
+            }
         }
 
         if (player.inSafeZone && player.isAutoFireEnabled) {
@@ -1359,7 +1567,7 @@ class SpaceGameEngine(
             player.hitFlash = max(0f, player.hitFlash - dt * 4f)
         }
         if (player.shieldHitFlash > 0f) {
-            player.shieldHitFlash = max(0f, player.shieldHitFlash - dt * 4.5f)
+            player.shieldHitFlash = max(0f, player.shieldHitFlash - dt * 4f)
         }
 
         player.timeSinceDamaged += dt
@@ -1385,13 +1593,14 @@ class SpaceGameEngine(
     }
 
     private fun snapVantsToFormation() {
-        val count = ownedVants.size
+        val activeVants = getActiveVants()
+        val count = activeVants.size
         if (count == 0) return
         val cosA = cos(player.angleRad)
         val sinA = sin(player.angleRad)
         val hullR = activeShipClass.hullRadius
         for (i in 0 until count) {
-            val vant = ownedVants[i]
+            val vant = activeVants[i]
             val (lx, ly, extraRot) = activeFormation.computeLocalSlot(i, count, hullR, elapsedTime)
             vant.worldX = player.x + lx * cosA - ly * sinA
             vant.worldY = player.y + lx * sinA + ly * cosA
@@ -1401,14 +1610,15 @@ class SpaceGameEngine(
     }
 
     private fun updateVantFormationPositions(dt: Float) {
-        val count = ownedVants.size
+        val activeVants = getActiveVants()
+        val count = activeVants.size
         if (count == 0) return
         val cosA = cos(player.angleRad)
         val sinA = sin(player.angleRad)
         val hullR = activeShipClass.hullRadius
         val lerpFactor = 1f - exp(-9.5f * dt)
         for (i in 0 until count) {
-            val vant = ownedVants[i]
+            val vant = activeVants[i]
             val (lx, ly, extraRot) = activeFormation.computeLocalSlot(i, count, hullR, elapsedTime)
             val targetX = player.x + lx * cosA - ly * sinA
             val targetY = player.y + lx * sinA + ly * cosA
@@ -1569,9 +1779,15 @@ class SpaceGameEngine(
                 alien.fireCooldown = max(0f, alien.fireCooldown - dt)
             }
 
-            val playerDistFromOrigin = hypot(player.x, player.y)
-            val playerInAlienZone = playerDistFromOrigin >= tier.minRadius - 120f &&
-                playerDistFromOrigin <= tier.maxRadius + 120f
+            val playerInAlienZone = if (activeMap == GameMap.MAP_X1) {
+                !player.inSafeZone &&
+                    player.x >= 0f && player.x <= GameConfig.MAP_X1_SIZE &&
+                    player.y >= 0f && player.y <= GameConfig.MAP_X1_SIZE
+            } else {
+                val playerDistFromOrigin = hypot(player.x, player.y)
+                playerDistFromOrigin >= tier.minRadius - 120f &&
+                    playerDistFromOrigin <= tier.maxRadius + 120f
+            }
 
             if (alien.isAggro && (player.inSafeZone || !playerInAlienZone)) {
                 alien.isAggro = false
@@ -1655,12 +1871,12 @@ class SpaceGameEngine(
             bolt.x += bolt.vx * dt
             bolt.y += bolt.vy * dt
 
-            if (bolt.lifeRemaining <= 0f || hypot(bolt.x, bolt.y) > GameConfig.MAP_RADIUS + 100f) {
+            if (bolt.lifeRemaining <= 0f || isOutOfActiveMapBounds(bolt.x, bolt.y)) {
                 iterator.remove()
                 continue
             }
 
-            if (!bolt.fromPlayer && hypot(bolt.x, bolt.y) <= GameConfig.SAFE_ZONE_RADIUS) {
+            if (!bolt.fromPlayer && isPointInActiveSafeZone(bolt.x, bolt.y)) {
                 spawnHitSparks(bolt.x, bolt.y, colorHex = 0xFF00E5FF, count = 4)
                 iterator.remove()
                 continue
@@ -1720,7 +1936,7 @@ class SpaceGameEngine(
         while (iterator.hasNext()) {
             val rocket = iterator.next()
             rocket.lifeRemaining -= dt
-            if (rocket.lifeRemaining <= 0f || hypot(rocket.x, rocket.y) > GameConfig.MAP_RADIUS + 100f) {
+            if (rocket.lifeRemaining <= 0f || isOutOfActiveMapBounds(rocket.x, rocket.y)) {
                 iterator.remove()
                 continue
             }
@@ -1827,9 +2043,11 @@ class SpaceGameEngine(
         if (remainingDamage > 0f) {
             player.hp -= remainingDamage
             player.hitFlash = 1f
-            if (!isRadiation) {
-                spawnHitSparks(hitX, hitY, colorHex = 0xFFFF2E4C, count = 5)
-            }
+            spawnHullHitSparks(
+                x = if (isRadiation) player.x else hitX,
+                y = if (isRadiation) player.y else hitY,
+                count = if (isRadiation) 7 else 13
+            )
         }
 
         val jitterX = (random.nextFloat() - 0.5f) * 18f
@@ -1930,35 +2148,93 @@ class SpaceGameEngine(
         requestSave()
     }
 
-    private fun spawnBonusBox() {
-        val (bx, by) = randomPointInAnnulus(
-            minRadius = GameConfig.SAFE_ZONE_RADIUS + 90f,
-            maxRadius = GameConfig.MAP_RADIUS - 160f,
-            rng = random
-        )
-        val dist = hypot(bx, by)
-        val zone = resolveZone(dist)
-        val creditAmount = when (zone) {
-            SpaceZone.ZONE_1_ALPHA -> (4 + random.nextInt(5)) * 25
-            SpaceZone.ZONE_2_BETA -> (8 + random.nextInt(8)) * 25
-            SpaceZone.ZONE_3_GAMMA -> (16 + random.nextInt(11)) * 25
-            SpaceZone.ZONE_4_OMEGA -> (28 + random.nextInt(17)) * 25
-            SpaceZone.SAFE_ZONE -> 100
+    private fun isOutOfActiveMapBounds(x: Float, y: Float): Boolean {
+        return if (activeMap == GameMap.MAP_X1) {
+            val pad = GameConfig.MAP_X1_RADIATION_OUTER_BUFFER + 180f
+            x < -pad || x > GameConfig.MAP_X1_SIZE + pad || y < -pad || y > GameConfig.MAP_X1_SIZE + pad
+        } else {
+            hypot(x, y) > GameConfig.MAP_RADIUS + 100f
         }
-        val xpAmount = when (zone) {
-            SpaceZone.ZONE_1_ALPHA -> 15
-            SpaceZone.ZONE_2_BETA -> 35
-            SpaceZone.ZONE_3_GAMMA -> 70
-            SpaceZone.ZONE_4_OMEGA -> 140
-            SpaceZone.SAFE_ZONE -> 10
+    }
+
+    private fun randomPointInX1Playable(margin: Float, safeZoneBuffer: Float): Pair<Float, Float> {
+        val minCoord = margin
+        val maxCoord = GameConfig.MAP_X1_SIZE - margin
+        val minSafeDist = GameConfig.MAP_X1_SAFE_ZONE_RADIUS + safeZoneBuffer
+        repeat(24) {
+            val rx = minCoord + random.nextFloat() * (maxCoord - minCoord)
+            val ry = minCoord + random.nextFloat() * (maxCoord - minCoord)
+            if (hypot(rx - GameConfig.MAP_X1_SAFE_ZONE_X, ry - GameConfig.MAP_X1_SAFE_ZONE_Y) >= minSafeDist) {
+                return Pair(rx, ry)
+            }
+        }
+        return Pair(GameConfig.MAP_X1_SIZE * 0.5f, GameConfig.MAP_X1_SIZE * 0.5f)
+    }
+
+    private fun spawnBonusBox() {
+        val bx: Float
+        val by: Float
+        val creditAmount: Int
+        val xpAmount: Int
+        val shieldAmount: Float
+
+        if (activeMap == GameMap.MAP_X1) {
+            val (rx, ry) = randomPointInX1Playable(margin = 260f, safeZoneBuffer = 120f)
+            bx = rx
+            by = ry
+            val distFromCorner = hypot(
+                bx - GameConfig.MAP_X1_SAFE_ZONE_X,
+                by - GameConfig.MAP_X1_SAFE_ZONE_Y
+            )
+            when {
+                distFromCorner < 5000f -> {
+                    creditAmount = (5 + random.nextInt(6)) * 25
+                    xpAmount = 20
+                    shieldAmount = 50f
+                }
+                distFromCorner < 10500f -> {
+                    creditAmount = (9 + random.nextInt(8)) * 25
+                    xpAmount = 40
+                    shieldAmount = 80f
+                }
+                else -> {
+                    creditAmount = (14 + random.nextInt(10)) * 25
+                    xpAmount = 65
+                    shieldAmount = 110f
+                }
+            }
+        } else {
+            val (rx, ry) = randomPointInAnnulus(
+                minRadius = GameConfig.SAFE_ZONE_RADIUS + 90f,
+                maxRadius = GameConfig.MAP_RADIUS - 160f,
+                rng = random
+            )
+            bx = rx
+            by = ry
+            val dist = hypot(bx, by)
+            val zone = resolveZone(dist)
+            creditAmount = when (zone) {
+                SpaceZone.ZONE_1_ALPHA -> (4 + random.nextInt(5)) * 25
+                SpaceZone.ZONE_2_BETA -> (8 + random.nextInt(8)) * 25
+                SpaceZone.ZONE_3_GAMMA -> (16 + random.nextInt(11)) * 25
+                SpaceZone.ZONE_4_OMEGA -> (28 + random.nextInt(17)) * 25
+                SpaceZone.SAFE_ZONE -> 100
+            }
+            xpAmount = when (zone) {
+                SpaceZone.ZONE_1_ALPHA -> 15
+                SpaceZone.ZONE_2_BETA -> 35
+                SpaceZone.ZONE_3_GAMMA -> 70
+                SpaceZone.ZONE_4_OMEGA -> 140
+                SpaceZone.SAFE_ZONE -> 10
+            }
+            shieldAmount = when (zone) {
+                SpaceZone.ZONE_1_ALPHA -> 40f
+                SpaceZone.ZONE_2_BETA -> 70f
+                SpaceZone.ZONE_3_GAMMA -> 110f
+                else -> 160f
+            }
         }
         val isShieldBox = random.nextFloat() < 0.24f
-        val shieldAmount = when (zone) {
-            SpaceZone.ZONE_1_ALPHA -> 40f
-            SpaceZone.ZONE_2_BETA -> 70f
-            SpaceZone.ZONE_3_GAMMA -> 110f
-            else -> 160f
-        }
         lootBoxes.add(
             LootBoxEntity(
                 id = nextLootId++,
@@ -2003,12 +2279,36 @@ class SpaceGameEngine(
     }
 
     private fun randomPointInZone(tier: AlienTier): Pair<Float, Float> {
+        if (activeMap == GameMap.MAP_X1) {
+            val margin = 280f + tier.radius
+            return randomPointInX1Playable(margin = margin, safeZoneBuffer = 200f + tier.radius)
+        }
         val inner = tier.minRadius + tier.radius + 50f
         val outer = tier.maxRadius - tier.radius - 50f
         return randomPointInAnnulus(inner, outer, random)
     }
 
     private fun clampAlienToZoneRing(alien: AlienEntity) {
+        if (activeMap == GameMap.MAP_X1) {
+            val pad = alien.radius + 90f
+            alien.x = alien.x.coerceIn(pad, GameConfig.MAP_X1_SIZE - pad)
+            alien.y = alien.y.coerceIn(pad, GameConfig.MAP_X1_SIZE - pad)
+            val dx = alien.x - GameConfig.MAP_X1_SAFE_ZONE_X
+            val dy = alien.y - GameConfig.MAP_X1_SAFE_ZONE_Y
+            val minDist = GameConfig.MAP_X1_SAFE_ZONE_RADIUS + alien.radius + 36f
+            val dist = hypot(dx, dy)
+            if (dist < minDist) {
+                if (dist < 0.001f) {
+                    alien.x = GameConfig.MAP_X1_SAFE_ZONE_X + minDist
+                    alien.y = GameConfig.MAP_X1_SAFE_ZONE_Y
+                } else {
+                    val scale = minDist / dist
+                    alien.x = GameConfig.MAP_X1_SAFE_ZONE_X + dx * scale
+                    alien.y = GameConfig.MAP_X1_SAFE_ZONE_Y + dy * scale
+                }
+            }
+            return
+        }
         val innerR = alien.tier.minRadius + alien.radius + 26f
         val outerR = alien.tier.maxRadius - alien.radius - 26f
         val d = hypot(alien.x, alien.y)
@@ -2111,6 +2411,28 @@ class SpaceGameEngine(
         }
     }
 
+    private fun spawnHullHitSparks(x: Float, y: Float, count: Int) {
+        val sparkPalette = longArrayOf(0xFFFF6D00, 0xFFFF2E4C, 0xFFFB923C, 0xFFFBBF24)
+        repeat(count) {
+            val angle = random.nextFloat() * 2f * PI.toFloat()
+            val speed = 85f + random.nextFloat() * 175f
+            val life = 0.18f + random.nextFloat() * 0.22f
+            val jitter = 4f + random.nextFloat() * 8f
+            particles.add(
+                ExplosionParticle(
+                    x = x + cos(angle) * jitter,
+                    y = y + sin(angle) * jitter,
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed,
+                    radius = 1.8f + random.nextFloat() * 2.1f,
+                    life = life,
+                    maxLife = life,
+                    colorHex = sparkPalette[random.nextInt(sparkPalette.size)]
+                )
+            )
+        }
+    }
+
     private fun updateEffects(dt: Float) {
         val pIt = particles.iterator()
         while (pIt.hasNext()) {
@@ -2162,6 +2484,19 @@ class SpaceGameEngine(
         }
     }
 
+    private fun generateSquareX1Stars(): List<Star> {
+        val starRng = Random(77411L)
+        return List(GameConfig.MAP_X1_STAR_COUNT) {
+            Star(
+                x = starRng.nextFloat() * GameConfig.MAP_X1_SIZE,
+                y = starRng.nextFloat() * GameConfig.MAP_X1_SIZE,
+                radius = 0.85f + starRng.nextFloat() * 2.15f,
+                alpha = 0.28f + starRng.nextFloat() * 0.70f,
+                tintType = starRng.nextInt(3)
+            )
+        }
+    }
+
     private fun generateCircularNebulae(): List<NebulaCloud> {
         val nebRng = Random(99103L)
         val palette = longArrayOf(0x181D4ED8, 0x160E7490, 0x166D28D9, 0x1510B981, 0x149F1239)
@@ -2172,6 +2507,19 @@ class SpaceGameEngine(
                 x = cos(angle) * r,
                 y = sin(angle) * r,
                 radius = 280f + nebRng.nextFloat() * 440f,
+                colorHex = palette[nebRng.nextInt(palette.size)]
+            )
+        }
+    }
+
+    private fun generateSquareX1Nebulae(): List<NebulaCloud> {
+        val nebRng = Random(51827L)
+        val palette = longArrayOf(0x1C312E81, 0x1A4C1D95, 0x181E3A8A, 0x166D28D9, 0x140E7490)
+        return List(GameConfig.MAP_X1_NEBULA_COUNT) {
+            NebulaCloud(
+                x = 600f + nebRng.nextFloat() * (GameConfig.MAP_X1_SIZE - 1200f),
+                y = 600f + nebRng.nextFloat() * (GameConfig.MAP_X1_SIZE - 1200f),
+                radius = 340f + nebRng.nextFloat() * 480f,
                 colorHex = palette[nebRng.nextInt(palette.size)]
             )
         }

@@ -17,6 +17,7 @@ class GameConstants {
   static const double playerBaseLaserDamage = 6.0;
 
   static const int maxVants = 8;
+  static const int maxOwnedVantsForFusion = 9;
   static const int flaxVantCost = 600;
   static const double formationSwitchCooldownSec = 3.0;
   static const double diamondShieldRegenPercentPerSec = 0.015;
@@ -36,6 +37,24 @@ class GameConstants {
   static const double autopilotStopRadius = 60.0;
   static const double autopilotMaxTargetRadius = 19800.0;
   static const double hudMinimapViewRadius = 4500.0;
+
+  // Jump Gate Portal & Classic Square Map (MAP X-1)
+  static const double mainJumpGateX = 220.0;
+  static const double mainJumpGateY = 0.0;
+  static const double mapX1Size = 14000.0;
+  static const double mapX1SafeZoneX = 1200.0;
+  static const double mapX1SafeZoneY = 1200.0;
+  static const double mapX1SafeZoneRadius = 500.0;
+  static const double mapX1SpawnX = 1200.0;
+  static const double mapX1SpawnY = 1350.0;
+  static const double mapX1AutopilotMin = 200.0;
+  static const double mapX1AutopilotMax = 13800.0;
+  static const double mapX1RadiationOuterBuffer = 360.0;
+  static const double mapX1BorderRadiationDps = 58.0;
+  static const int mapX1StarCount = 1500;
+  static const int mapX1BonusBoxCount = 50;
+  static const double jumpGateInteractRadius = 120.0;
+  static const double warpFlashDurationSec = 0.4;
 
   static const double playerAttackRange = 520.0;
   static const double playerFireInterval = 0.24;
@@ -144,6 +163,16 @@ class ShipClassCatalog {
   };
 
   static ShipClassSpec of(ShipClass shipClass) => specs[shipClass]!;
+}
+
+enum GameMap {
+  mainMap,
+  mapX1,
+}
+
+extension GameMapMeta on GameMap {
+  String get displayName => this == GameMap.mapX1 ? 'MAP X-1' : 'MAIN MAP';
+  String get gateLabel => this == GameMap.mapX1 ? 'GATE: BASE' : 'GATE: X-1';
 }
 
 enum SpaceZone {

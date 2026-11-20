@@ -61,8 +61,21 @@ class GamePersistence(context: Context) {
             }
             put("ownedFormations", formationsArray)
             put("activeFormation", state.activeFormation.name)
+            put("pilotName", state.pilotName ?: JSONObject.NULL)
+            put("companyId", state.companyId ?: JSONObject.NULL)
         }
-        prefs.edit().putString(KEY_SAVE_JSON, root.toString()).apply()
+        prefs.edit()
+            .putString(KEY_SAVE_JSON, root.toString())
+            .apply {
+                if (state.pilotName != null && state.companyId != null) {
+                    putString(KEY_PILOT_NAME, state.pilotName)
+                    putString(KEY_COMPANY_ID, state.companyId)
+                } else {
+                    remove(KEY_PILOT_NAME)
+                    remove(KEY_COMPANY_ID)
+                }
+            }
+            .apply()
     }
 
     fun load(): SaveState? {
@@ -105,7 +118,7 @@ class GamePersistence(context: Context) {
             val vantsArray = root.optJSONArray("ownedVants")
             if (vantsArray != null) {
                 for (i in 0 until vantsArray.length()) {
-                    if (parsedVants.size >= GameConfig.MAX_VANTS) break
+                    if (parsedVants.size >= GameConfig.MAX_OWNED_VANTS_FOR_FUSION) break
                     val vObj = vantsArray.optJSONObject(i) ?: continue
                     val vId = vObj.optInt("id", i + 1).coerceAtLeast(1)
                     val tierName = vObj.optString("tier", "")
@@ -136,6 +149,17 @@ class GamePersistence(context: Context) {
             val laserCount = parsedActiveShip.laserSlotCount
             val shieldCount = parsedActiveShip.shieldSlotCount
 
+            val savedPilotName = if (root.isNull("pilotName")) {
+                prefs.getString(KEY_PILOT_NAME, null)
+            } else {
+                root.optString("pilotName", "").ifBlank { prefs.getString(KEY_PILOT_NAME, null) }
+            }
+            val savedCompanyId = if (root.isNull("companyId")) {
+                prefs.getString(KEY_COMPANY_ID, null)
+            } else {
+                root.optString("companyId", "").ifBlank { prefs.getString(KEY_COMPANY_ID, null) }
+            }
+
             SaveState(
                 credits = root.optInt("credits", 0).coerceAtLeast(0),
                 kills = root.optInt("kills", 0).coerceAtLeast(0),
@@ -160,7 +184,9 @@ class GamePersistence(context: Context) {
                 activeFormation = parsedActiveFormation,
                 equippedSectorChipId = chipId,
                 currentMissionIndex = root.optInt("currentMissionIndex", 0).coerceIn(0, MissionCatalog.all.size),
-                currentMissionProgress = root.optInt("currentMissionProgress", 0).coerceAtLeast(0)
+                currentMissionProgress = root.optInt("currentMissionProgress", 0).coerceAtLeast(0),
+                pilotName = savedPilotName?.trim()?.takeIf { it.length in 3..14 },
+                companyId = PilotCompany.fromId(savedCompanyId)?.id
             )
         } catch (_: Exception) {
             null
@@ -168,7 +194,11 @@ class GamePersistence(context: Context) {
     }
 
     fun clear() {
-        prefs.edit().remove(KEY_SAVE_JSON).apply()
+        prefs.edit()
+            .remove(KEY_SAVE_JSON)
+            .remove(KEY_PILOT_NAME)
+            .remove(KEY_COMPANY_ID)
+            .apply()
     }
 
     private fun encodeSlotIds(ids: List<Int?>): JSONArray {
@@ -192,5 +222,7 @@ class GamePersistence(context: Context) {
     companion object {
         private const val PREFS_NAME = "dark_orbit_mobile_save"
         private const val KEY_SAVE_JSON = "save_state_v2"
+        private const val KEY_PILOT_NAME = "pilotName"
+        private const val KEY_COMPANY_ID = "companyId"
     }
 }

@@ -116,6 +116,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _hudState.value = engine.buildHudSnapshot()
     }
 
+    fun triggerJumpGate() {
+        if (engine.triggerJumpGate()) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
     fun buyOrSelectShipClass(shipClass: ShipClass) {
         if (engine.buyOrSelectShipClass(shipClass)) {
             _hudState.value = engine.buildHudSnapshot()

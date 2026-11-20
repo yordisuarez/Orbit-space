@@ -183,7 +183,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                               _TabPill(
                                 label: 'VANTS',
                                 selected: _selectedTab == 1,
-                                showDot: game.ownedVants.any(
+                                showDot: game.activeVants.any(
                                       (VantDrone v) => v
                                           .slotsForConfig(game.activeConfig)
                                           .any((EquipmentItem? s) => s == null),
@@ -764,7 +764,11 @@ class _HangarOverlayState extends State<HangarOverlay> {
   }
 
   Widget _buildVantsTab(DarkOrbitGame game) {
-    final List<VantDrone> vants = game.ownedVants;
+    final List<VantDrone> vants = game.activeVants;
+    final int totalOwned = game.ownedVants.length;
+    final String reserveSuffix = totalOwned > GameConstants.maxVants
+        ? ' • +${totalOwned - GameConstants.maxVants} RES'
+        : '';
     final List<EquipmentItem> compatInv = game.inventory
         .where((EquipmentItem i) =>
             i.spec.category == EquipmentCategory.laser ||
@@ -790,7 +794,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   ),
                   const SizedBox(width: 8.0),
                   Text(
-                    'FLAX: ${game.flaxVantCount} • IRIS: ${game.irisVantCount} • CFG ${game.activeConfig} • ${game.activeFormationSpec.displayName}',
+                    'FLAX: ${game.flaxVantCount} • IRIS: ${game.irisVantCount}$reserveSuffix • CFG ${game.activeConfig} • ${game.activeFormationSpec.displayName}',
                     style: const TextStyle(
                       color: Color(0xFFFBBF24),
                       fontSize: 10.5,
@@ -1274,14 +1278,26 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   ),
                 );
               }),
-              // 4th Base Item: Flax VANT (600 CR, max 8 VANTs total)
+              // 4th Base Item: Flax VANT (600 CR; allowed while irisCount < 8 && total < 9 for 8th Iris fusion)
               Expanded(
                 child: Builder(
                   builder: (BuildContext context) {
-                    final int ownedVants = game.ownedVants.length;
-                    final bool atCap = ownedVants >= GameConstants.maxVants;
-                    final bool canBuy = !atCap &&
+                    final int irisCount = game.irisVantCount;
+                    final int totalOwned = game.ownedVants.length;
+                    final int activeCount = game.activeVants.length;
+                    final bool atMaxIris = irisCount >= GameConstants.maxVants;
+                    final bool atFusionCap = !atMaxIris &&
+                        totalOwned >= GameConstants.maxOwnedVantsForFusion;
+                    final bool canBuy = game.canBuyFlaxVant &&
                         game.credits >= GameConstants.flaxVantCost;
+                    final String buttonLabel = atMaxIris
+                        ? 'MAX (8/8 IRIS)'
+                        : atFusionCap
+                            ? 'FUSE FLAX (9/9)'
+                            : 'BUY ${GameConstants.flaxVantCost} CR';
+                    final String countSubtitle = totalOwned > GameConstants.maxVants
+                        ? '1 Slot • $activeCount/${GameConstants.maxVants} (+1 RES)'
+                        : '1 Slot • $totalOwned/${GameConstants.maxVants}';
                     return Container(
                       padding: const EdgeInsets.all(10.0),
                       decoration: BoxDecoration(
@@ -1317,7 +1333,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                                       ),
                                     ),
                                     Text(
-                                      '1 Slot • $ownedVants/${GameConstants.maxVants}',
+                                      countSubtitle,
                                       maxLines: 1,
                                       softWrap: false,
                                       style: const TextStyle(
@@ -1350,13 +1366,11 @@ class _HangarOverlayState extends State<HangarOverlay> {
                                 minimumSize: const Size(0.0, 34.0),
                               ),
                               child: Text(
-                                atCap
-                                    ? 'MAX 8 / 8'
-                                    : 'BUY ${GameConstants.flaxVantCost} CR',
+                                buttonLabel,
                                 maxLines: 1,
                                 softWrap: false,
                                 style: const TextStyle(
-                                  fontSize: 10.8,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),

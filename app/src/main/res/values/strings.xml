@@ -5,6 +5,7 @@
     <string name="hud_level_prefix">LV</string>
     <string name="hud_xp_label">XP</string>
     <string name="hud_hull_label">HULL</string>
+    <string name="hud_hp_label">HP</string>
     <string name="hud_shield_label">SHD</string>
     <string name="hud_safe_zone">SAFE ZONE</string>
     <string name="hud_zone_alpha">ZONE 1: ALPHA</string>
@@ -59,7 +60,8 @@
     <string name="hangar_vants_hint">Tap empty slot to equip • Tap filled slot to unequip • Tap Laser/Shield below</string>
     <string name="hangar_vants_universal_slot">LASER / SHD</string>
     <string name="hangar_shop_drones">ORBITAL VANT DRONES</string>
-    <string name="hangar_vant_max">MAX 8 / 8</string>
+    <string name="hangar_vant_max">MAX (8/8 IRIS)</string>
+    <string name="hangar_vant_fuse_required">FUSE FLAX (9/9)</string>
     <string name="hangar_inventory">INVENTORY</string>
     <string name="hangar_inventory_empty">Inventory empty — buy Level 1 gear in SHOP or fuse upgrades in FUSE.</string>
     <string name="hangar_slot_tap_hint">Tap slot to unequip • Tap inventory to equip</string>
@@ -89,4 +91,26 @@
     <string name="cd_cancel_autopilot">Cancel autopilot</string>
     <string name="action_debug_add_credits">+1M CR</string>
     <string name="action_debug_add_level">+1 LVL</string>
+    <string name="map_name_main">MAIN MAP</string>
+    <string name="map_name_x1">MAP X-1</string>
+    <string name="hud_zone_x1_sector">SECTOR X-1</string>
+    <string name="action_jump_gate">JUMP</string>
+    <string name="cd_jump_gate">Activate Jump Gate portal</string>
+    <string name="tactical_map_x1_title">TACTICAL MAP • X-1</string>
+    <string name="intro_title">DARK ORBIT MOBILE</string>
+    <string name="intro_subtitle">ORBITAL COMBAT SECTOR • STARBASE COMMAND</string>
+    <string name="intro_action_start">START</string>
+    <string name="intro_action_continue_prefix">CONTINUE AS</string>
+    <string name="onboarding_step1_tag">STEP 1 OF 2 • ALLEGIANCE</string>
+    <string name="onboarding_step1_title">CHOOSE YOUR COMPANY</string>
+    <string name="onboarding_step2_tag">STEP 2 OF 2 • CALLSIGN</string>
+    <string name="onboarding_step2_title">PILOT REGISTRATION</string>
+    <string name="onboarding_pilot_name_label">PILOT NAME</string>
+    <string name="onboarding_pilot_name_placeholder">Enter 3–14 characters</string>
+    <string name="onboarding_pilot_name_hint">3 to 14 characters • Displayed in space &amp; Hangar</string>
+    <string name="onboarding_action_back">BACK</string>
+    <string name="onboarding_action_next">NEXT: CALLSIGN</string>
+    <string name="onboarding_action_launch">LAUNCH SHIP</string>
+    <string name="cd_company_emblem">Company emblem</string>
+    <string name="cd_back">Go back</string>
 </resources>

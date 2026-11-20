@@ -59,9 +59,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.theme.AlienCoreOrange
 import com.example.ui.theme.AmberCredits
@@ -395,6 +398,69 @@ fun AttackLaserButton(
 }
 
 @Composable
+fun JumpGateButton(
+    gateLabel: String,
+    onJump: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val pulseTransition = rememberInfiniteTransition(label = "jump_gate_pulse")
+    val pulse by pulseTransition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(560),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "jump_gate_alpha"
+    )
+    val jumpDesc = stringResource(R.string.cd_jump_gate)
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(68.dp)
+            .clip(CircleShape)
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xEE00E5FF),
+                        Color(0xDD0284C7),
+                        Color(0xCC1E1B4B)
+                    )
+                )
+            )
+            .border(
+                width = (2.2f + 1.4f * pulse).dp,
+                color = Color.White.copy(alpha = 0.65f + 0.35f * pulse),
+                shape = CircleShape
+            )
+            .clickable(onClick = onJump)
+            .testTag("jump_gate_button")
+            .semantics { contentDescription = "$jumpDesc ($gateLabel)" }
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Bolt,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = stringResource(R.string.action_jump_gate),
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
+@Composable
 fun TacticalMinimap(
     engine: SpaceGameEngine,
     frameTick: Long,
@@ -403,13 +469,14 @@ fun TacticalMinimap(
 ) {
     val tickMarker = frameTick
     val mapDesc = stringResource(R.string.cd_open_tactical_map)
+    val isMapX1 = engine.activeMap == GameMap.MAP_X1
 
     Box(
         modifier = modifier
             .size(134.dp)
             .clip(CircleShape)
-            .background(SpaceHudPanel)
-            .border(1.8.dp, CyanLaser.copy(alpha = 0.72f), CircleShape)
+            .background(if (isMapX1) Color(0xDC080720) else SpaceHudPanel)
+            .border(1.8.dp, if (isMapX1) Color(0xCC818CF8) else CyanLaser.copy(alpha = 0.72f), CircleShape)
             .clickable(onClick = onExpandMap)
             .padding(4.dp)
             .testTag("tactical_minimap")
@@ -466,60 +533,151 @@ fun TacticalMinimap(
                     strokeWidth = 0.85f
                 )
 
-                // Curved arcs of concentric Sector rings & outer red border when within local radar range
-                val ringDash = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f)
-                if (abs(playerOriginDist - GameConfig.ZONE_1_MAX_RADIUS) <= viewRadius + 250f) {
-                    drawCircle(
-                        color = Color(0x994ADE80),
-                        radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
-                        center = baseCenter,
-                        style = Stroke(width = 1.4f, pathEffect = ringDash)
-                    )
-                }
-                if (abs(playerOriginDist - GameConfig.ZONE_2_MAX_RADIUS) <= viewRadius + 250f) {
-                    drawCircle(
-                        color = Color(0x99FACC15),
-                        radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
-                        center = baseCenter,
-                        style = Stroke(width = 1.4f, pathEffect = ringDash)
-                    )
-                }
-                if (abs(playerOriginDist - GameConfig.ZONE_3_MAX_RADIUS) <= viewRadius + 250f) {
-                    drawCircle(
-                        color = Color(0x99FB923C),
-                        radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
-                        center = baseCenter,
-                        style = Stroke(width = 1.4f, pathEffect = ringDash)
-                    )
-                }
-                if (abs(playerOriginDist - GameConfig.MAP_RADIUS) <= viewRadius + 250f) {
-                    drawCircle(
-                        color = CrimsonDanger.copy(alpha = 0.9f),
-                        radius = GameConfig.MAP_RADIUS * scale,
-                        center = baseCenter,
+                if (engine.activeMap == GameMap.MAP_X1) {
+                    // Straight red square edge walls & outer radiation fill when approaching MAP X-1 borders
+                    val leftWallX = center.x + (0f - playerX) * scale
+                    val rightWallX = center.x + (GameConfig.MAP_X1_SIZE - playerX) * scale
+                    val topWallY = center.y + (0f - playerY) * scale
+                    val bottomWallY = center.y + (GameConfig.MAP_X1_SIZE - playerY) * scale
+
+                    val wallRadFill = Color(0x36FF1744)
+                    if (leftWallX > 0f) {
+                        drawRect(
+                            color = wallRadFill,
+                            topLeft = Offset(0f, 0f),
+                            size = androidx.compose.ui.geometry.Size(leftWallX.coerceAtMost(size.width), size.height)
+                        )
+                    }
+                    if (rightWallX < size.width) {
+                        val rx = rightWallX.coerceAtLeast(0f)
+                        drawRect(
+                            color = wallRadFill,
+                            topLeft = Offset(rx, 0f),
+                            size = androidx.compose.ui.geometry.Size((size.width - rx).coerceAtLeast(0f), size.height)
+                        )
+                    }
+                    if (topWallY > 0f) {
+                        drawRect(
+                            color = wallRadFill,
+                            topLeft = Offset(0f, 0f),
+                            size = androidx.compose.ui.geometry.Size(size.width, topWallY.coerceAtMost(size.height))
+                        )
+                    }
+                    if (bottomWallY < size.height) {
+                        val by = bottomWallY.coerceAtLeast(0f)
+                        drawRect(
+                            color = wallRadFill,
+                            topLeft = Offset(0f, by),
+                            size = androidx.compose.ui.geometry.Size(size.width, (size.height - by).coerceAtLeast(0f))
+                        )
+                    }
+
+                    // Draw crisp straight red border walls
+                    val borderRectLeft = leftWallX
+                    val borderRectTop = topWallY
+                    val borderRectSize = GameConfig.MAP_X1_SIZE * scale
+                    drawRect(
+                        color = CrimsonDanger.copy(alpha = 0.94f),
+                        topLeft = Offset(borderRectLeft, borderRectTop),
+                        size = androidx.compose.ui.geometry.Size(borderRectSize, borderRectSize),
                         style = Stroke(width = 2.4f)
                     )
-                }
 
-                // Central Safe Zone Base (when within local radar range)
-                if (playerOriginDist <= viewRadius + GameConfig.SAFE_ZONE_RADIUS + 120f) {
-                    val safeR = GameConfig.SAFE_ZONE_RADIUS * scale
-                    drawCircle(
-                        color = CyanLaser.copy(alpha = 0.22f),
-                        radius = safeR,
-                        center = baseCenter
-                    )
-                    drawCircle(
-                        color = CyanLaser.copy(alpha = 0.9f),
-                        radius = safeR,
-                        center = baseCenter,
-                        style = Stroke(width = 1.5f)
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = 2.8f,
-                        center = baseCenter
-                    )
+                    // Top-left Corner Safe Zone & Return Portal (1200, 1200) when within local radar range
+                    val dxSafe = GameConfig.MAP_X1_SAFE_ZONE_X - playerX
+                    val dySafe = GameConfig.MAP_X1_SAFE_ZONE_Y - playerY
+                    if (hypot(dxSafe, dySafe) <= viewRadius + GameConfig.MAP_X1_SAFE_ZONE_RADIUS + 120f) {
+                        val safeCenter = Offset(center.x + dxSafe * scale, center.y + dySafe * scale)
+                        val safeR = GameConfig.MAP_X1_SAFE_ZONE_RADIUS * scale
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.22f),
+                            radius = safeR,
+                            center = safeCenter
+                        )
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.9f),
+                            radius = safeR,
+                            center = safeCenter,
+                            style = Stroke(width = 1.5f)
+                        )
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.45f + 0.45f * pulse),
+                            radius = 4.6f,
+                            center = safeCenter,
+                            style = Stroke(width = 1.4f)
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 2.2f,
+                            center = safeCenter
+                        )
+                    }
+                } else {
+                    // Curved arcs of concentric Sector rings & outer red border when within local radar range
+                    val ringDash = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f)
+                    if (abs(playerOriginDist - GameConfig.ZONE_1_MAX_RADIUS) <= viewRadius + 250f) {
+                        drawCircle(
+                            color = Color(0x994ADE80),
+                            radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
+                            center = baseCenter,
+                            style = Stroke(width = 1.4f, pathEffect = ringDash)
+                        )
+                    }
+                    if (abs(playerOriginDist - GameConfig.ZONE_2_MAX_RADIUS) <= viewRadius + 250f) {
+                        drawCircle(
+                            color = Color(0x99FACC15),
+                            radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
+                            center = baseCenter,
+                            style = Stroke(width = 1.4f, pathEffect = ringDash)
+                        )
+                    }
+                    if (abs(playerOriginDist - GameConfig.ZONE_3_MAX_RADIUS) <= viewRadius + 250f) {
+                        drawCircle(
+                            color = Color(0x99FB923C),
+                            radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
+                            center = baseCenter,
+                            style = Stroke(width = 1.4f, pathEffect = ringDash)
+                        )
+                    }
+                    if (abs(playerOriginDist - GameConfig.MAP_RADIUS) <= viewRadius + 250f) {
+                        drawCircle(
+                            color = CrimsonDanger.copy(alpha = 0.9f),
+                            radius = GameConfig.MAP_RADIUS * scale,
+                            center = baseCenter,
+                            style = Stroke(width = 2.4f)
+                        )
+                    }
+
+                    // Central Safe Zone Base & Jump Gate Portal (220, 0) when within local radar range
+                    if (playerOriginDist <= viewRadius + GameConfig.SAFE_ZONE_RADIUS + 120f) {
+                        val safeR = GameConfig.SAFE_ZONE_RADIUS * scale
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.22f),
+                            radius = safeR,
+                            center = baseCenter
+                        )
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.9f),
+                            radius = safeR,
+                            center = baseCenter,
+                            style = Stroke(width = 1.5f)
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 2.8f,
+                            center = baseCenter
+                        )
+                        val gatePos = Offset(
+                            center.x + (GameConfig.MAIN_JUMP_GATE_X - playerX) * scale,
+                            center.y + (GameConfig.MAIN_JUMP_GATE_Y - playerY) * scale
+                        )
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.55f + 0.4f * pulse),
+                            radius = 3.8f,
+                            center = gatePos,
+                            style = Stroke(width = 1.3f)
+                        )
+                    }
                 }
 
                 // Nearby Bonus & Cargo Boxes within 4,500-unit radar radius
@@ -704,14 +862,18 @@ fun ExpandableTacticalMapOverlay(
             }
             .testTag("tactical_map_overlay")
     ) {
-        // ~75% of screen height (capped by width so circle never clips)
-        val circleDiameter = min(maxHeight.value * 0.78f, maxWidth.value * 0.78f).coerceAtLeast(220f).dp
+        val isMapX1 = engine.activeMap == GameMap.MAP_X1
+        // ~78% of screen height (capped by width so map never clips)
+        val mapDiameter = min(maxHeight.value * 0.78f, maxWidth.value * 0.78f).coerceAtLeast(220f).dp
+        val mapShape = if (isMapX1) RoundedCornerShape(14.dp) else CircleShape
+        val mapBgColor = if (isMapX1) Color(0xD407081F) else Color(0xC4050C1B)
+        val mapBorderColor = if (isMapX1) Color(0xCC6366F1) else CyanLaser.copy(alpha = 0.8f)
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.pointerInput(Unit) {
-                // Absorb taps on the header/controls area so only outside-circle backdrop closes
+                // Absorb taps on the header/controls area so only outside-map backdrop closes
                 detectTapGestures { }
             }
         ) {
@@ -731,7 +893,9 @@ fun ExpandableTacticalMapOverlay(
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = stringResource(R.string.tactical_map_title),
+                    text = stringResource(
+                        if (isMapX1) R.string.tactical_map_x1_title else R.string.tactical_map_title
+                    ),
                     style = MaterialTheme.typography.labelLarge,
                     color = CyanLaser,
                     maxLines = 1,
@@ -772,25 +936,38 @@ fun ExpandableTacticalMapOverlay(
 
             Box(
                 modifier = Modifier
-                    .size(circleDiameter)
-                    .clip(CircleShape)
-                    .background(Color(0xC4050C1B))
-                    .border(2.2.dp, CyanLaser.copy(alpha = 0.8f), CircleShape)
-                    .pointerInput(Unit) {
+                    .size(mapDiameter)
+                    .clip(mapShape)
+                    .background(mapBgColor)
+                    .border(2.2.dp, mapBorderColor, mapShape)
+                    .pointerInput(isMapX1) {
                         detectTapGestures { tapOffset ->
-                            val centerX = size.width * 0.5f
-                            val centerY = size.height * 0.5f
-                            val usableRadius = min(centerX, centerY) - 10f
-                            val dx = tapOffset.x - centerX
-                            val dy = tapOffset.y - centerY
-                            val tapDist = hypot(dx, dy)
-                            if (tapDist <= usableRadius + 8f && usableRadius > 1f) {
-                                val worldScale = GameConfig.MAP_RADIUS / usableRadius
-                                val wx = dx * worldScale
-                                val wy = dy * worldScale
+                            if (isMapX1) {
+                                val pad = 14f
+                                val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                                val usableH = (size.height - pad * 2f).coerceAtLeast(1f)
+                                val normX = ((tapOffset.x - pad) / usableW).coerceIn(0f, 1f)
+                                val normY = ((tapOffset.y - pad) / usableH).coerceIn(0f, 1f)
+                                val wx = (normX * GameConfig.MAP_X1_SIZE)
+                                    .coerceIn(GameConfig.MAP_X1_AUTOPILOT_MIN, GameConfig.MAP_X1_AUTOPILOT_MAX)
+                                val wy = (normY * GameConfig.MAP_X1_SIZE)
+                                    .coerceIn(GameConfig.MAP_X1_AUTOPILOT_MIN, GameConfig.MAP_X1_AUTOPILOT_MAX)
                                 onSetAutopilot(wx, wy)
                             } else {
-                                onClose()
+                                val centerX = size.width * 0.5f
+                                val centerY = size.height * 0.5f
+                                val usableRadius = min(centerX, centerY) - 10f
+                                val dx = tapOffset.x - centerX
+                                val dy = tapOffset.y - centerY
+                                val tapDist = hypot(dx, dy)
+                                if (tapDist <= usableRadius + 8f && usableRadius > 1f) {
+                                    val worldScale = GameConfig.MAP_RADIUS / usableRadius
+                                    val wx = dx * worldScale
+                                    val wy = dy * worldScale
+                                    onSetAutopilot(wx, wy)
+                                } else {
+                                    onClose()
+                                }
                             }
                         }
                     }
@@ -800,116 +977,217 @@ fun ExpandableTacticalMapOverlay(
                     @Suppress("UNUSED_EXPRESSION")
                     tickMarker
 
+                    val pulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
+                    val pad = 14f
+                    val mapSpanPx = (size.minDimension - pad * 2f).coerceAtLeast(1f)
                     val center = Offset(size.width * 0.5f, size.height * 0.5f)
                     val mapPxRadius = size.minDimension * 0.5f - 10f
-                    val scale = mapPxRadius / GameConfig.MAP_RADIUS
-                    val pulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
+                    val scale = if (isMapX1) {
+                        mapSpanPx / GameConfig.MAP_X1_SIZE
+                    } else {
+                        mapPxRadius / GameConfig.MAP_RADIUS
+                    }
 
-                    // Subtle polar crosshairs
-                    val gridColor = Color(0x2838BDF8)
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(center.x - mapPxRadius, center.y),
-                        end = Offset(center.x + mapPxRadius, center.y),
-                        strokeWidth = 1.2f
-                    )
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(center.x, center.y - mapPxRadius),
-                        end = Offset(center.x, center.y + mapPxRadius),
-                        strokeWidth = 1.2f
-                    )
-
-                    // 4 Concentric Sector Rings
-                    val ringDash = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
-                    drawCircle(
-                        color = Color(0x994ADE80),
-                        radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
-                        center = center,
-                        style = Stroke(width = 1.6f, pathEffect = ringDash)
-                    )
-                    drawCircle(
-                        color = Color(0x99FACC15),
-                        radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
-                        center = center,
-                        style = Stroke(width = 1.6f, pathEffect = ringDash)
-                    )
-                    drawCircle(
-                        color = Color(0x99FB923C),
-                        radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
-                        center = center,
-                        style = Stroke(width = 1.6f, pathEffect = ringDash)
-                    )
-                    drawCircle(
-                        color = CrimsonDanger.copy(alpha = 0.85f),
-                        radius = mapPxRadius,
-                        center = center,
-                        style = Stroke(width = 2.4f)
-                    )
-
-                    // Sector Labels S1..S4 along top vertical axis
-                    drawIntoCanvas { canvas ->
-                        labelPaint.textSize = (size.minDimension * 0.042f).coerceIn(18f, 30f)
-                        val sectors = listOf(
-                            Triple("S1", 2800f, 0xFF4ADE80.toInt()),
-                            Triple("S2", 7500f, 0xFFFACC15.toInt()),
-                            Triple("S3", 12500f, 0xFFFB923C.toInt()),
-                            Triple("S4", 17500f, 0xFFC084FC.toInt())
-                        )
-                        for ((name, worldR, colorInt) in sectors) {
-                            labelPaint.color = colorInt
-                            canvas.nativeCanvas.drawText(
-                                name,
-                                center.x,
-                                center.y - worldR * scale + labelPaint.textSize * 0.35f,
-                                labelPaint
-                            )
+                    fun worldToCanvas(wx: Float, wy: Float): Offset {
+                        return if (isMapX1) {
+                            Offset(pad + wx * scale, pad + wy * scale)
+                        } else {
+                            Offset(center.x + wx * scale, center.y + wy * scale)
                         }
                     }
 
-                    // Central Safe Zone Base (Cyan)
-                    val safeR = (GameConfig.SAFE_ZONE_RADIUS * scale).coerceAtLeast(8f)
-                    drawCircle(
-                        color = CyanLaser.copy(alpha = 0.24f),
-                        radius = safeR,
-                        center = center
-                    )
-                    drawCircle(
-                        color = CyanLaser,
-                        radius = safeR,
-                        center = center,
-                        style = Stroke(width = 1.8f)
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = 3.2f,
-                        center = center
-                    )
+                    if (isMapX1) {
+                        // Classic square 14000 x 14000 coordinate grid (every 2000 units)
+                        val gridSteps = 7
+                        for (i in 1 until gridSteps) {
+                            val offsetPx = pad + (mapSpanPx * i / gridSteps)
+                            drawLine(
+                                color = Color(0x28818CF8),
+                                start = Offset(offsetPx, pad),
+                                end = Offset(offsetPx, pad + mapSpanPx),
+                                strokeWidth = 1.1f
+                            )
+                            drawLine(
+                                color = Color(0x28818CF8),
+                                start = Offset(pad, offsetPx),
+                                end = Offset(pad + mapSpanPx, offsetPx),
+                                strokeWidth = 1.1f
+                            )
+                        }
+
+                        // Glowing red square Radiation Zone perimeter
+                        drawRect(
+                            color = CrimsonDanger.copy(alpha = 0.25f),
+                            topLeft = Offset(pad, pad),
+                            size = androidx.compose.ui.geometry.Size(mapSpanPx, mapSpanPx),
+                            style = Stroke(width = 6f)
+                        )
+                        drawRect(
+                            color = CrimsonDanger.copy(alpha = 0.90f),
+                            topLeft = Offset(pad, pad),
+                            size = androidx.compose.ui.geometry.Size(mapSpanPx, mapSpanPx),
+                            style = Stroke(width = 2.2f)
+                        )
+
+                        // Top-left Corner Safe Zone & Return Portal (1200, 1200)
+                        val safeCenter = worldToCanvas(
+                            GameConfig.MAP_X1_SAFE_ZONE_X,
+                            GameConfig.MAP_X1_SAFE_ZONE_Y
+                        )
+                        val safeR = (GameConfig.MAP_X1_SAFE_ZONE_RADIUS * scale).coerceAtLeast(10f)
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.22f),
+                            radius = safeR,
+                            center = safeCenter
+                        )
+                        drawCircle(
+                            color = CyanLaser,
+                            radius = safeR,
+                            center = safeCenter,
+                            style = Stroke(width = 1.8f)
+                        )
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.55f + 0.40f * pulse),
+                            radius = 6.0f + 1.5f * pulse,
+                            center = safeCenter,
+                            style = Stroke(width = 1.8f)
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 2.8f,
+                            center = safeCenter
+                        )
+
+                        drawIntoCanvas { canvas ->
+                            labelPaint.textSize = (size.minDimension * 0.036f).coerceIn(15f, 24f)
+                            labelPaint.color = 0xFF38BDF8.toInt()
+                            canvas.nativeCanvas.drawText(
+                                "GATE: BASE",
+                                safeCenter.x + safeR + 28f,
+                                safeCenter.y + 6f,
+                                labelPaint
+                            )
+                            labelPaint.textSize = (size.minDimension * 0.044f).coerceIn(18f, 28f)
+                            labelPaint.color = 0x55818CF8
+                            canvas.nativeCanvas.drawText(
+                                "X-1",
+                                center.x,
+                                center.y + labelPaint.textSize * 0.35f,
+                                labelPaint
+                            )
+                        }
+                    } else {
+                        // Subtle polar crosshairs
+                        val gridColor = Color(0x2838BDF8)
+                        drawLine(
+                            color = gridColor,
+                            start = Offset(center.x - mapPxRadius, center.y),
+                            end = Offset(center.x + mapPxRadius, center.y),
+                            strokeWidth = 1.2f
+                        )
+                        drawLine(
+                            color = gridColor,
+                            start = Offset(center.x, center.y - mapPxRadius),
+                            end = Offset(center.x, center.y + mapPxRadius),
+                            strokeWidth = 1.2f
+                        )
+
+                        // 4 Concentric Sector Rings
+                        val ringDash = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                        drawCircle(
+                            color = Color(0x994ADE80),
+                            radius = GameConfig.ZONE_1_MAX_RADIUS * scale,
+                            center = center,
+                            style = Stroke(width = 1.6f, pathEffect = ringDash)
+                        )
+                        drawCircle(
+                            color = Color(0x99FACC15),
+                            radius = GameConfig.ZONE_2_MAX_RADIUS * scale,
+                            center = center,
+                            style = Stroke(width = 1.6f, pathEffect = ringDash)
+                        )
+                        drawCircle(
+                            color = Color(0x99FB923C),
+                            radius = GameConfig.ZONE_3_MAX_RADIUS * scale,
+                            center = center,
+                            style = Stroke(width = 1.6f, pathEffect = ringDash)
+                        )
+                        drawCircle(
+                            color = CrimsonDanger.copy(alpha = 0.85f),
+                            radius = mapPxRadius,
+                            center = center,
+                            style = Stroke(width = 2.4f)
+                        )
+
+                        // Sector Labels S1..S4 along top vertical axis
+                        drawIntoCanvas { canvas ->
+                            labelPaint.textSize = (size.minDimension * 0.042f).coerceIn(18f, 30f)
+                            val sectors = listOf(
+                                Triple("S1", 2800f, 0xFF4ADE80.toInt()),
+                                Triple("S2", 7500f, 0xFFFACC15.toInt()),
+                                Triple("S3", 12500f, 0xFFFB923C.toInt()),
+                                Triple("S4", 17500f, 0xFFC084FC.toInt())
+                            )
+                            for ((name, worldR, colorInt) in sectors) {
+                                labelPaint.color = colorInt
+                                canvas.nativeCanvas.drawText(
+                                    name,
+                                    center.x,
+                                    center.y - worldR * scale + labelPaint.textSize * 0.35f,
+                                    labelPaint
+                                )
+                            }
+                        }
+
+                        // Central Safe Zone Base (Cyan) & Jump Gate indicator
+                        val safeR = (GameConfig.SAFE_ZONE_RADIUS * scale).coerceAtLeast(8f)
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.24f),
+                            radius = safeR,
+                            center = center
+                        )
+                        drawCircle(
+                            color = CyanLaser,
+                            radius = safeR,
+                            center = center,
+                            style = Stroke(width = 1.8f)
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 3.2f,
+                            center = center
+                        )
+                        val gatePt = worldToCanvas(GameConfig.MAIN_JUMP_GATE_X, GameConfig.MAIN_JUMP_GATE_Y)
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.65f + 0.35f * pulse),
+                            radius = 3.4f,
+                            center = gatePt,
+                            style = Stroke(width = 1.4f)
+                        )
+                    }
 
                     // Bonus & Cargo Boxes
                     for (box in engine.lootBoxes) {
-                        val bx = center.x + box.x * scale
-                        val by = center.y + box.y * scale
+                        val bPos = worldToCanvas(box.x, box.y)
                         val isCargo = box.kind == LootBoxKind.CARGO_BOX
                         drawCircle(
                             color = if (isCargo) AmberCredits else Color(0xBBFACC15),
                             radius = if (isCargo) 3.4f else 2.2f,
-                            center = Offset(bx, by)
+                            center = bPos
                         )
                     }
 
                     // Aliens (normal & pulsing BOSS)
                     val lockedId = engine.lockedAlienId
                     for (alien in engine.aliens) {
-                        val ax = center.x + alien.x * scale
-                        val ay = center.y + alien.y * scale
+                        val aPos = worldToCanvas(alien.x, alien.y)
                         val tierColor = Color(alien.tier.primaryColorHex)
 
                         if (alien.id == lockedId) {
                             drawCircle(
                                 color = CrimsonDanger,
                                 radius = if (alien.isBoss) 11f else 8f,
-                                center = Offset(ax, ay),
+                                center = aPos,
                                 style = Stroke(width = 1.8f)
                             )
                         }
@@ -918,40 +1196,45 @@ fun ExpandableTacticalMapOverlay(
                             drawCircle(
                                 color = AmberCredits.copy(alpha = 0.25f + 0.38f * pulse),
                                 radius = 7.5f + 3.2f * pulse,
-                                center = Offset(ax, ay)
+                                center = aPos
                             )
                             drawCircle(
                                 color = CrimsonDanger.copy(alpha = 0.95f),
                                 radius = 5.4f,
-                                center = Offset(ax, ay)
+                                center = aPos
                             )
                             drawCircle(
                                 color = AmberCredits,
                                 radius = 2.6f,
-                                center = Offset(ax, ay)
+                                center = aPos
                             )
                         } else {
                             drawCircle(
                                 color = tierColor,
                                 radius = (alien.tier.minimapDotRadius * 1.15f).coerceAtLeast(2.8f),
-                                center = Offset(ax, ay)
+                                center = aPos
                             )
                         }
                     }
 
-                    val px = center.x + engine.player.x * scale
-                    val py = center.y + engine.player.y * scale
+                    val playerPos = worldToCanvas(
+                        if (isMapX1) engine.player.x.coerceIn(0f, GameConfig.MAP_X1_SIZE) else engine.player.x,
+                        if (isMapX1) engine.player.y.coerceIn(0f, GameConfig.MAP_X1_SIZE) else engine.player.y
+                    )
+                    val px = playerPos.x
+                    val py = playerPos.y
 
                     // Active Autopilot Dashed Route & Crosshair
                     val apX = engine.autopilotTargetX
                     val apY = engine.autopilotTargetY
                     if (apX != null && apY != null) {
-                        val tx = center.x + apX * scale
-                        val ty = center.y + apY * scale
+                        val tPos = worldToCanvas(apX, apY)
+                        val tx = tPos.x
+                        val ty = tPos.y
                         drawLine(
                             color = CyanLaser.copy(alpha = 0.72f),
-                            start = Offset(px, py),
-                            end = Offset(tx, ty),
+                            start = playerPos,
+                            end = tPos,
                             strokeWidth = 2.0f,
                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 7f), 0f)
                         )
@@ -959,7 +1242,7 @@ fun ExpandableTacticalMapOverlay(
                         drawCircle(
                             color = CyanLaser.copy(alpha = 0.45f + 0.45f * pulse),
                             radius = wpR,
-                            center = Offset(tx, ty),
+                            center = tPos,
                             style = Stroke(width = 1.8f)
                         )
                         drawLine(
@@ -977,7 +1260,7 @@ fun ExpandableTacticalMapOverlay(
                         drawCircle(
                             color = Color.White,
                             radius = 2.5f,
-                            center = Offset(tx, ty)
+                            center = tPos
                         )
                     }
 
@@ -985,17 +1268,17 @@ fun ExpandableTacticalMapOverlay(
                     drawCircle(
                         color = CyanLaser.copy(alpha = 0.16f + 0.14f * pulse),
                         radius = 20f + 4.5f * pulse,
-                        center = Offset(px, py)
+                        center = playerPos
                     )
                     drawCircle(
                         color = CyanLaser.copy(alpha = 0.40f),
                         radius = 13.5f,
-                        center = Offset(px, py)
+                        center = playerPos
                     )
                     drawCircle(
                         color = Color.White.copy(alpha = 0.55f + 0.35f * pulse),
                         radius = 16.5f + 2.5f * pulse,
-                        center = Offset(px, py),
+                        center = playerPos,
                         style = Stroke(width = 1.4f)
                     )
                     val angle = engine.player.angleRad
@@ -1137,25 +1420,28 @@ fun TopTacticalHud(
             Column(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
-                    .width(130.dp)
+                    .width(150.dp)
+                    .height(48.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(SpaceHudPanel)
                     .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
                     .testTag("vitals_hud_panel")
             ) {
                 val shdRatio = (hud.playerShield.toFloat() / hud.playerMaxShield.coerceAtLeast(1)).coerceIn(0f, 1f)
                 val hpRatio = (hud.playerHp.toFloat() / hud.playerMaxHp.coerceAtLeast(1)).coerceIn(0f, 1f)
 
                 HudVitalBarRow(
-                    label = "${stringResource(R.string.hud_shield_label)} ${hud.playerShield}/${hud.playerMaxShield}",
+                    label = "${stringResource(R.string.hud_shield_label)}: ${hud.playerShield} / ${hud.playerMaxShield}",
                     ratio = shdRatio,
-                    barColor = CyanThruster
+                    barColor = CyanThruster,
+                    tag = "hud_shield_bar"
                 )
                 HudVitalBarRow(
-                    label = "${stringResource(R.string.hud_hull_label)} ${hud.playerHp}/${hud.playerMaxHp}",
+                    label = "${stringResource(R.string.hud_hp_label)}: ${hud.playerHp} / ${hud.playerMaxHp}",
                     ratio = hpRatio,
-                    barColor = if (hpRatio < 0.35f) CrimsonDanger else EmeraldHull
+                    barColor = if (hpRatio < 0.35f) CrimsonDanger else EmeraldHull,
+                    tag = "hud_hp_bar"
                 )
             }
 
@@ -1290,35 +1576,82 @@ fun TopTacticalHud(
             }
         }
 
-        // Row 2: Dynamic Zone Indicator Badge, Locked Target, Radiation Warning, Coords
+        // Row 2: Active Map Badge, Dynamic Zone Indicator Badge, Locked Target, Radiation Warning, Coords
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            val zoneLabel = when (hud.currentZone) {
-                SpaceZone.SAFE_ZONE -> stringResource(R.string.hud_safe_zone)
-                SpaceZone.ZONE_1_ALPHA -> stringResource(R.string.hud_zone_alpha)
-                SpaceZone.ZONE_2_BETA -> stringResource(R.string.hud_zone_beta)
-                SpaceZone.ZONE_3_GAMMA -> stringResource(R.string.hud_zone_gamma)
-                SpaceZone.ZONE_4_OMEGA -> stringResource(R.string.hud_zone_omega)
+            val isMapX1 = hud.activeMap == GameMap.MAP_X1
+            val mapBadgeColor = if (isMapX1) Color(0xFFA5B4FC) else CyanLaser
+            val mapBadgeBg = if (isMapX1) Color(0xCC1E1B4B) else Color(0xCC0A192F)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(mapBadgeBg)
+                    .border(1.dp, mapBadgeColor.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("map_name_badge")
+            ) {
+                Text(
+                    text = stringResource(
+                        if (isMapX1) R.string.map_name_x1 else R.string.map_name_main
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = mapBadgeColor,
+                    fontWeight = FontWeight.Bold
+                )
             }
-            val zoneColor = when (hud.currentZone) {
-                SpaceZone.SAFE_ZONE -> CyanLaser
-                SpaceZone.ZONE_1_ALPHA -> Color(0xFF4ADE80)
-                SpaceZone.ZONE_2_BETA -> Color(0xFFFACC15)
-                SpaceZone.ZONE_3_GAMMA -> Color(0xFFFB923C)
-                SpaceZone.ZONE_4_OMEGA -> Color(0xFFC084FC)
+
+            val zoneLabel = if (isMapX1) {
+                when {
+                    hud.inSafeZone -> stringResource(R.string.hud_safe_zone)
+                    hud.isTakingZoneRadiation -> stringResource(R.string.hud_radiation_warning)
+                    else -> stringResource(R.string.hud_zone_x1_sector)
+                }
+            } else {
+                when (hud.currentZone) {
+                    SpaceZone.SAFE_ZONE -> stringResource(R.string.hud_safe_zone)
+                    SpaceZone.ZONE_1_ALPHA -> stringResource(R.string.hud_zone_alpha)
+                    SpaceZone.ZONE_2_BETA -> stringResource(R.string.hud_zone_beta)
+                    SpaceZone.ZONE_3_GAMMA -> stringResource(R.string.hud_zone_gamma)
+                    SpaceZone.ZONE_4_OMEGA -> stringResource(R.string.hud_zone_omega)
+                }
             }
-            val zoneBg = when (hud.currentZone) {
-                SpaceZone.SAFE_ZONE -> Color(0xCC062838)
-                SpaceZone.ZONE_1_ALPHA -> Color(0xCC072415)
-                SpaceZone.ZONE_2_BETA -> Color(0xCC2A2006)
-                SpaceZone.ZONE_3_GAMMA -> Color(0xCC2C1306)
-                SpaceZone.ZONE_4_OMEGA -> Color(0xCC280A2E)
+            val zoneColor = if (isMapX1) {
+                when {
+                    hud.inSafeZone -> CyanLaser
+                    hud.isTakingZoneRadiation -> CrimsonDanger
+                    else -> Color(0xFF818CF8)
+                }
+            } else {
+                when (hud.currentZone) {
+                    SpaceZone.SAFE_ZONE -> CyanLaser
+                    SpaceZone.ZONE_1_ALPHA -> Color(0xFF4ADE80)
+                    SpaceZone.ZONE_2_BETA -> Color(0xFFFACC15)
+                    SpaceZone.ZONE_3_GAMMA -> Color(0xFFFB923C)
+                    SpaceZone.ZONE_4_OMEGA -> Color(0xFFC084FC)
+                }
             }
-            val zoneIcon = when (hud.currentZone) {
-                SpaceZone.SAFE_ZONE -> Icons.Default.Security
-                SpaceZone.ZONE_4_OMEGA -> Icons.Default.Warning
+            val zoneBg = if (isMapX1) {
+                when {
+                    hud.inSafeZone -> Color(0xCC062838)
+                    hud.isTakingZoneRadiation -> Color(0xCC3B0A14)
+                    else -> Color(0xCC131338)
+                }
+            } else {
+                when (hud.currentZone) {
+                    SpaceZone.SAFE_ZONE -> Color(0xCC062838)
+                    SpaceZone.ZONE_1_ALPHA -> Color(0xCC072415)
+                    SpaceZone.ZONE_2_BETA -> Color(0xCC2A2006)
+                    SpaceZone.ZONE_3_GAMMA -> Color(0xCC2C1306)
+                    SpaceZone.ZONE_4_OMEGA -> Color(0xCC280A2E)
+                }
+            }
+            val zoneIcon = when {
+                hud.inSafeZone -> Icons.Default.Security
+                hud.isTakingZoneRadiation || hud.currentZone == SpaceZone.ZONE_4_OMEGA -> Icons.Default.Warning
                 else -> Icons.Default.GpsFixed
             }
 
@@ -1605,28 +1938,43 @@ private fun HudMissionTracker(
 private fun HudVitalBarRow(
     label: String,
     ratio: Float,
-    barColor: Color
+    barColor: Color,
+    tag: String
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = barColor
-        )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(17.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color(0xFF060C18))
+            .border(0.8.dp, barColor.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+            .testTag(tag)
+    ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(5.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(Color(0xFF060C18))
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(ratio.coerceIn(0f, 1f))
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(barColor)
-            )
-        }
+                .align(Alignment.CenterStart)
+                .fillMaxWidth(ratio.coerceIn(0f, 1f))
+                .height(17.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(barColor.copy(alpha = 0.88f))
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.2.sp,
+                shadow = Shadow(
+                    color = Color(0xEB000000),
+                    offset = Offset(1f, 1.2f),
+                    blurRadius = 2.5f
+                )
+            ),
+            color = Color.White,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip
+        )
     }
 }
