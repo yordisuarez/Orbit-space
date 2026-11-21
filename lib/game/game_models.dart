@@ -870,7 +870,8 @@ class EquipmentSpec {
   final double shieldBonus;
   final int sectorTier;
   final Color accentColor;
-
+  String get statLabel => statSummary;
+  
   String get statSummary {
     switch (category) {
       case EquipmentCategory.laser:
