@@ -43,15 +43,30 @@ class GuideEntry {
 }
 
 class GameStrings {
-  const GameStrings._();
-    String get dockedSwapReady => 'DOCKED • READY';
-  String get dockRequiredShort => 'DOCK REQUIRED';
-  String get capsuleShipTitle => 'PILOT CAPSULE';
-  String get permanentBadge => 'PERMANENT';
-  String get pilotingLabel => 'PILOTING';
-  String get boardShipLabel => 'BOARD SHIP';
+    const GameStrings._(this.lang);
+  final GameLanguage lang;
 
-  static GameStringsView of(GameLanguage lang) => GameStringsView(lang);
+  static GameStrings of(GameLanguage lang) => GameStrings._(lang);
+
+  String get sectorMapTitle => t(lang, 'SECTOR MAP', 'MAPA DE SECTOR');
+  String get tapToSteerHint =>
+      t(lang, 'Tap map to autopilot', 'Toca el mapa para piloto automático');
+  String get closeLabel => actionClose(lang);
+  String get dockedSwapReady => t(lang, 'DOCKED • READY', 'ATRACADO • LISTO');
+  String get dockRequiredShort => t(lang, 'DOCK REQUIRED', 'REQUIERE ATRAQUE');
+  String get capsuleShipTitle => t(lang, 'PILOT CAPSULE', 'CÁPSULA PILOTO');
+  String get permanentBadge => t(lang, 'PERMANENT', 'PERMANENTE');
+  String get pilotingLabel => t(lang, 'PILOTING', 'PILOTANDO');
+  String get boardShipLabel => t(lang, 'BOARD SHIP', 'ABORDAR NAVE');
+  String get adminModeOnLabel => 'ADMIN: ON';
+  String get adminModeOffLabel => 'ADMIN: OFF';
+  String get hangarReadOnlyNotice => t(
+        lang,
+        'Dock at a station to swap ships',
+        'Atraca en una estación para cambiar de nave',
+      );
+  String get fleetBayTitle => t(lang, 'FLEET BAY', 'BAHÍA DE FLOTA');
+  
   
   static const List<GuideEntry> guideEntries = <GuideEntry>[
     GuideEntry(
