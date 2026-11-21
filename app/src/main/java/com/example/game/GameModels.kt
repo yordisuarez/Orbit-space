@@ -933,6 +933,176 @@ class FloatingPopup(
     val textSize: Float = 14f
 )
 
+/**
+ * Tiered mineable resources enforcing the Clockwise City Refining Loop:
+ * - City 1 (Blue / C1) native raw ores -> refine in City 2 (Green / C2)
+ * - City 2 (Green / C2) native raw ores -> refine in City 3 (Red / C3)
+ * - City 3 (Red / C3) native raw ores -> refine in City 1 (Blue / C1)
+ * - Yellow Crystal -> refines exclusively in Nucleus (0-0) Black Market Safe Zone
+ */
+enum class ResourceType(
+    val displayName: String,
+    val refinedName: String,
+    val tier: Int,
+    val nativeSectorId: String,
+    val refinesInSectorId: String,
+    val rawBasePrice: Int,
+    val refinedBasePrice: Int,
+    val colorHex: Long,
+    val isYellowCrystal: Boolean = false
+) {
+    // Native to City 1 (Blue / C1) -> Refines in City 2 (Green / C2)
+    AETHER_T1("Cobalt Dust", "Cobalt Ingot", 1, "C1", "C2", 45, 140, 0xFF38BDF8),
+    AETHER_T2("Cryo Quartz", "Cryo Prism", 2, "C1", "C2", 85, 260, 0xFF0EA5E9),
+    AETHER_T3("Ionite Shard", "Ionite Core", 3, "C1", "C2", 160, 480, 0xFF60A5FA),
+    AETHER_T4("Aetherium Ore", "Aetherium Plate", 4, "C1", "C2", 290, 870, 0xFF818CF8),
+    AETHER_T5("Void Sapphire", "Void Alloy", 5, "C1", "C2", 520, 1560, 0xFFA78BFA),
+
+    // Native to City 2 (Green / C2) -> Refines in City 3 (Red / C3)
+    VERDANT_T1("Beryl Moss", "Beryl Fiber", 1, "C2", "C3", 45, 140, 0xFF4ADE80),
+    VERDANT_T2("Jade Silicate", "Jade Matrix", 2, "C2", "C3", 85, 260, 0xFF22C55E),
+    VERDANT_T3("Viridium Ore", "Viridium Bar", 3, "C2", "C3", 160, 480, 0xFF10B981),
+    VERDANT_T4("Bio-Plasma", "Plasma Gel", 4, "C2", "C3", 290, 870, 0xFF34D399),
+    VERDANT_T5("Emerald Core", "Emerald Alloy", 5, "C2", "C3", 520, 1560, 0xFF2DD4BF),
+
+    // Native to City 3 (Red / C3) -> Refines in City 1 (Blue / C1)
+    SOLARIS_T1("Ferrite Slag", "Ferrite Steel", 1, "C3", "C1", 45, 140, 0xFFFB7185),
+    SOLARIS_T2("Pyro Sulfur", "Pyro Cell", 2, "C3", "C1", 85, 260, 0xFFF43F5E),
+    SOLARIS_T3("Crimson Ore", "Crimson Alloy", 3, "C3", "C1", 160, 480, 0xFFEF4444),
+    SOLARIS_T4("Solarite Vein", "Solarite Rod", 4, "C3", "C1", 290, 870, 0xFFFB923C),
+    SOLARIS_T5("Magma Core", "Starfire Ingot", 5, "C3", "C1", 520, 1560, 0xFFF97316),
+
+    // High-Risk Yellow Ring & Nucleus exclusive -> Refines exclusively in Nucleus (0-0)
+    YELLOW_CRYSTAL(
+        displayName = "Yellow Crystal",
+        refinedName = "Refined Yellow Crystal",
+        tier = 5,
+        nativeSectorId = "0-0",
+        refinesInSectorId = "0-0",
+        rawBasePrice = 760,
+        refinedBasePrice = 2450,
+        colorHex = 0xFFFACC15,
+        isYellowCrystal = true
+    );
+
+    companion object {
+        const val RAW_REQUIRED_PER_REFINE = 2
+
+        fun forRegionAndTier(nativeCityId: String, tier: Int): ResourceType {
+            val clamped = tier.coerceIn(1, 5)
+            return entries.firstOrNull {
+                !it.isYellowCrystal && it.nativeSectorId == nativeCityId && it.tier == clamped
+            } ?: AETHER_T1
+        }
+    }
+}
+
+class ResourceNodeEntity(
+    val id: Int,
+    val resourceType: ResourceType,
+    var x: Float,
+    var y: Float,
+    val yieldAmount: Int,
+    val radius: Float,
+    var rotationRad: Float,
+    var pulsePhase: Float,
+    var harvestProgress: Float = 0f
+)
+
+enum class StationKind {
+    REFINERY,
+    LOCAL_MARKET,
+    CRAFTING
+}
+
+enum class CraftingRecipeId(
+    val displayName: String,
+    val effectSummary: String,
+    val refinedCost: Int,
+    val minRefinedTier: Int,
+    val accentHex: Long,
+    val resultEquipment: EquipmentItemId? = null
+) {
+    HULL_REPAIR_KIT(
+        displayName = "Hull Nanite Repair Kit",
+        effectSummary = "Restores 100% Hull & Shield immediately",
+        refinedCost = 1,
+        minRefinedTier = 1,
+        accentHex = 0xFF34D399
+    ),
+    PLASMA_AMMO_PACK(
+        displayName = "Overcharged Plasma Ammo (+25)",
+        effectSummary = "+25 supercharged rounds (+35% Laser DMG)",
+        refinedCost = 1,
+        minRefinedTier = 1,
+        accentHex = 0xFFFACC15
+    ),
+    SHIELD_CHIP_LV1(
+        displayName = "Sector Chip Lv 1",
+        effectSummary = "Crafts 1× Chip Lv 1 into Hangar inventory",
+        refinedCost = 2,
+        minRefinedTier = 1,
+        accentHex = 0xFF94A3B8,
+        resultEquipment = EquipmentItemId.CHIP_1
+    ),
+    SHIELD_CHIP_LV2(
+        displayName = "Sector Chip Lv 2",
+        effectSummary = "Crafts 1× Chip Lv 2 (Moderate Zone protection)",
+        refinedCost = 2,
+        minRefinedTier = 2,
+        accentHex = 0xFFFACC15,
+        resultEquipment = EquipmentItemId.CHIP_2
+    ),
+    LASER_LF1(
+        displayName = "LF-1 Laser Cannon",
+        effectSummary = "Crafts 1× LF-1 Laser (+12 DMG) into Hangar",
+        refinedCost = 2,
+        minRefinedTier = 1,
+        accentHex = 0xFFFF6B35,
+        resultEquipment = EquipmentItemId.LF_1
+    ),
+    SHIELD_SG1(
+        displayName = "SG-1 Shield Generator",
+        effectSummary = "Crafts 1× SG-1 Shield (+80 SHD) into Hangar",
+        refinedCost = 2,
+        minRefinedTier = 1,
+        accentHex = 0xFF38BDF8,
+        resultEquipment = EquipmentItemId.SG_1
+    )
+}
+
+data class SectorStation(
+    val kind: StationKind,
+    val sectorId: String,
+    val name: String,
+    val worldX: Float,
+    val worldY: Float,
+    val interactRadius: Float = 165f,
+    val accentColorHex: Long
+)
+
+data class MarketResourceListing(
+    val resourceType: ResourceType,
+    val isRefined: Boolean,
+    val buyPrice: Int,
+    val sellPrice: Int,
+    val localStock: Int
+)
+
+data class MarketEquipmentListing(
+    val itemId: EquipmentItemId,
+    val buyPrice: Int,
+    val localStock: Int
+)
+
+data class LocalMarketSnapshot(
+    val sectorId: String,
+    val marketName: String,
+    val isBlackMarket: Boolean,
+    val resourceListings: List<MarketResourceListing>,
+    val equipmentListings: List<MarketEquipmentListing>
+)
+
 data class SaveState(
     val credits: Int,
     val kills: Int,
@@ -956,7 +1126,10 @@ data class SaveState(
     val currentMissionProgress: Int,
     val pilotName: String? = null,
     val companyId: String? = null,
-    val currentSectorId: String = GalaxyMapGraph.DEFAULT_SECTOR_ID
+    val currentSectorId: String = GalaxyMapGraph.DEFAULT_SECTOR_ID,
+    val rawCargo: Map<ResourceType, Int> = emptyMap(),
+    val refinedCargo: Map<ResourceType, Int> = emptyMap(),
+    val overchargedAmmo: Int = 0
 )
 
 data class MissionSnapshot(
@@ -1034,6 +1207,15 @@ data class HudSnapshot(
     val isAlive: Boolean = true,
     val isPaused: Boolean = false,
     val isHangarOpen: Boolean = false,
+    val nearestStationKind: StationKind? = null,
+    val nearestStationName: String? = null,
+    val activeStationOverlay: StationKind? = null,
+    val activeLocalMarket: LocalMarketSnapshot? = null,
+    val rawCargo: Map<ResourceType, Int> = emptyMap(),
+    val refinedCargo: Map<ResourceType, Int> = emptyMap(),
+    val overchargedAmmo: Int = 0,
+    val miningNodeName: String? = null,
+    val miningProgress: Float = 0f,
     val equipment: EquipmentSnapshot = EquipmentSnapshot(),
     val mission: MissionSnapshot = MissionSnapshot()
 )

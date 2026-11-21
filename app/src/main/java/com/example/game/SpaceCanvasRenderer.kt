@@ -112,6 +112,8 @@ fun DrawScope.renderSpaceWorld(
         }
 
         drawSectorJumpGatePortals(engine, popupPaint, minX, maxX, minY, maxY)
+        drawCentralStations(engine, popupPaint, minX, maxX, minY, maxY)
+        drawResourceNodes(engine, popupPaint, minX, maxX, minY, maxY)
         drawLootBoxes(engine, minX, maxX, minY, maxY)
 
         if (engine.player.isAlive) {
@@ -481,62 +483,391 @@ private fun DrawScope.drawCentralSectorSafeZone(
         center = center
     )
     drawCircle(
-        color = ringColor.copy(alpha = 0.22f * pulse),
+        color = CyanLaser.copy(alpha = if (sector.isNucleus) 0.34f * pulse else 0.20f * pulse),
         radius = safeR,
         center = center,
-        style = Stroke(width = 16f)
+        style = Stroke(width = if (sector.isNucleus) 22f else 16f)
     )
     drawCircle(
-        color = CyanLaser.copy(alpha = 0.80f),
+        color = CyanLaser.copy(alpha = if (sector.isNucleus) 0.95f else 0.80f),
         radius = safeR,
         center = center,
         style = Stroke(
-            width = 3.2f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 14f), time * 26f)
+            width = if (sector.isNucleus) 4.2f else 3.2f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 12f), time * 26f)
         )
     )
     if (sector.isNucleus) {
+        // Crisp glowing cyan safe-zone perimeter + subtle outer gold Black Market accent
         drawCircle(
-            color = AmberCredits.copy(alpha = 0.65f),
+            color = CyanLaser.copy(alpha = 0.68f),
+            radius = safeR - 10f,
+            center = center,
+            style = Stroke(width = 2.0f)
+        )
+        drawCircle(
+            color = AmberCredits.copy(alpha = 0.55f),
             radius = safeR + 24f,
             center = center,
-            style = Stroke(width = 2.4f)
+            style = Stroke(width = 2.2f)
         )
     }
 
-    // Rotating central station hub
+    // Rotating central beacon core
     rotate(degrees = time * 11f, pivot = center) {
-        drawCircle(color = Color(0xFF16243D), radius = 78f, center = center, style = Stroke(width = 12f))
-        drawCircle(color = ringColor.copy(alpha = 0.8f), radius = 84f, center = center, style = Stroke(width = 2.0f))
+        drawCircle(color = Color(0xFF16243D), radius = 64f, center = center, style = Stroke(width = 10f))
+        drawCircle(color = ringColor.copy(alpha = 0.8f), radius = 70f, center = center, style = Stroke(width = 2.0f))
         for (i in 0 until 4) {
             val a = i * (PI.toFloat() * 0.5f)
-            val p1 = Offset(center.x + cos(a) * 34f, center.y + sin(a) * 34f)
-            val p2 = Offset(center.x + cos(a) * 108f, center.y + sin(a) * 108f)
-            drawLine(Color(0xFF334155), p1, p2, strokeWidth = 10f, cap = StrokeCap.Round)
-            drawLine(ringColor.copy(alpha = 0.85f), p1, p2, strokeWidth = 2.2f, cap = StrokeCap.Round)
-            drawCircle(ringColor, radius = 4.2f, center = p2)
+            val p1 = Offset(center.x + cos(a) * 28f, center.y + sin(a) * 28f)
+            val p2 = Offset(center.x + cos(a) * 86f, center.y + sin(a) * 86f)
+            drawLine(Color(0xFF334155), p1, p2, strokeWidth = 8f, cap = StrokeCap.Round)
+            drawLine(ringColor.copy(alpha = 0.85f), p1, p2, strokeWidth = 2.0f, cap = StrokeCap.Round)
+            drawCircle(ringColor, radius = 3.8f, center = p2)
         }
     }
-    drawCircle(color = Color(0xFF0F1C33), radius = 40f, center = center)
-    drawCircle(color = ringColor, radius = 40f, center = center, style = Stroke(width = 2.2f))
-    drawCircle(color = CyanLaser, radius = 12f * (0.9f + 0.1f * pulse), center = center)
-    drawCircle(color = Color.White, radius = 5f, center = center)
+    drawCircle(color = Color(0xFF0F1C33), radius = 34f, center = center)
+    drawCircle(color = ringColor, radius = 34f, center = center, style = Stroke(width = 2.2f))
+    drawCircle(color = CyanLaser, radius = 10f * (0.9f + 0.1f * pulse), center = center)
+    drawCircle(color = Color.White, radius = 4.5f, center = center)
 
     val stationTitle = when {
-        sector.isNucleus -> "BLACK MARKET • SAFE ZONE"
-        sector.isCapitalCity -> "${sector.id} CAPITAL BASE • MARKET • VAULT"
+        sector.isNucleus -> "NUCLEUS • BLACK MARKET SAFE ZONE"
+        sector.isCapitalCity -> "${sector.id} CAPITAL SAFE ZONE"
         else -> "${sector.id} SAFE ZONE OUTPOST"
     }
     val nativeCanvas = drawContext.canvas.nativeCanvas
     popupPaint.textSize = 15f
     popupPaint.color = android.graphics.Color.argb(220, 4, 7, 17)
-    nativeCanvas.drawText(stationTitle, center.x + 1.2f, center.y + 134f, popupPaint)
+    nativeCanvas.drawText(stationTitle, center.x + 1.2f, center.y + 114f, popupPaint)
     popupPaint.color = if (sector.isNucleus) {
-        android.graphics.Color.rgb(251, 191, 36)
+        android.graphics.Color.rgb(0, 229, 255)
     } else {
         android.graphics.Color.rgb(56, 189, 248)
     }
-    nativeCanvas.drawText(stationTitle, center.x, center.y + 133f, popupPaint)
+    nativeCanvas.drawText(stationTitle, center.x, center.y + 113f, popupPaint)
+}
+
+/**
+ * Renders the physical Refining Station and Isolated Local/Black Market structures
+ * positioned in the Safe Zone center of C1, C2, C3, and Nucleus 0-0.
+ */
+private fun DrawScope.drawCentralStations(
+    engine: SpaceGameEngine,
+    popupPaint: Paint,
+    minX: Float,
+    maxX: Float,
+    minY: Float,
+    maxY: Float
+) {
+    if (engine.activeStations.isEmpty()) return
+    val nearest = engine.nearestStation()
+    val t = engine.elapsedTime
+    val pulse = 0.72f + 0.28f * sin(t * 4.0f)
+    val nativeCanvas = drawContext.canvas.nativeCanvas
+
+    for (station in engine.activeStations) {
+        val sx = station.worldX
+        val sy = station.worldY
+        if (sx + 210f < minX || sx - 210f > maxX || sy + 210f < minY || sy - 210f > maxY) {
+            continue
+        }
+        val center = Offset(sx, sy)
+        val accent = Color(station.accentColorHex)
+        val isNear = nearest?.kind == station.kind
+
+        // Ambient glow halo
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    accent.copy(alpha = if (isNear) 0.40f else 0.22f),
+                    accent.copy(alpha = 0.08f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = if (isNear) 128f else 98f
+            ),
+            radius = if (isNear) 128f else 98f,
+            center = center
+        )
+
+        // Docking proximity ring
+        drawCircle(
+            color = accent.copy(alpha = if (isNear) 0.62f * pulse else 0.24f),
+            radius = station.interactRadius,
+            center = center,
+            style = Stroke(
+                width = if (isNear) 2.4f else 1.4f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), -t * 28f)
+            )
+        )
+
+        if (station.kind == StationKind.REFINERY) {
+            // Industrial Octagonal Refining Smelter Structure
+            rotate(degrees = t * 14f, pivot = center) {
+                val oct = Path().apply {
+                    for (i in 0 until 8) {
+                        val a = i * (PI.toFloat() / 4f)
+                        val r = 56f
+                        val px = sx + cos(a) * r
+                        val py = sy + sin(a) * r
+                        if (i == 0) moveTo(px, py) else lineTo(px, py)
+                    }
+                    close()
+                }
+                drawPath(oct, color = Color(0xFF1A1412))
+                drawPath(oct, color = accent.copy(alpha = 0.9f), style = Stroke(width = 3.2f))
+
+                // 4 Thermal Smelter Conduits
+                for (i in 0 until 4) {
+                    val a = i * (PI.toFloat() * 0.5f) + PI.toFloat() * 0.25f
+                    val p1 = Offset(sx + cos(a) * 20f, sy + sin(a) * 20f)
+                    val p2 = Offset(sx + cos(a) * 70f, sy + sin(a) * 70f)
+                    drawLine(Color(0xFF475569), p1, p2, strokeWidth = 10f, cap = StrokeCap.Round)
+                    drawLine(accent, p1, p2, strokeWidth = 3.2f, cap = StrokeCap.Round)
+                    drawCircle(Color(0xFFFDE047), radius = 4.5f, center = p2)
+                }
+            }
+            // Molten Furnace Core
+            drawCircle(color = Color(0xFF27130A), radius = 26f, center = center)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.White, Color(0xFFFACC15), accent, Color.Transparent),
+                    center = center,
+                    radius = 22f
+                ),
+                radius = 19f * (0.88f + 0.12f * pulse),
+                center = center
+            )
+            drawCircle(color = accent, radius = 28f, center = center, style = Stroke(width = 2.4f))
+        } else if (station.kind == StationKind.CRAFTING) {
+            // Precision Emerald Assembly Foundry / Crafting Station Structure
+            rotate(degrees = t * 18f, pivot = center) {
+                // Outer 6-tooth industrial gear ring
+                val gear = Path().apply {
+                    val teeth = 6
+                    for (i in 0 until teeth * 2) {
+                        val a = i * (PI.toFloat() / teeth)
+                        val r = if (i % 2 == 0) 62f else 48f
+                        val px = sx + cos(a) * r
+                        val py = sy + sin(a) * r
+                        if (i == 0) moveTo(px, py) else lineTo(px, py)
+                    }
+                    close()
+                }
+                drawPath(gear, color = Color(0xFF0A1E1B))
+                drawPath(gear, color = accent.copy(alpha = 0.92f), style = Stroke(width = 3.0f))
+
+                // 3 Precision Robotic Assembly Arms
+                for (i in 0 until 3) {
+                    val a = i * (2f * PI.toFloat() / 3f)
+                    val innerP = Offset(sx + cos(a) * 24f, sy + sin(a) * 24f)
+                    val outerP = Offset(sx + cos(a) * 56f, sy + sin(a) * 56f)
+                    drawLine(Color(0xFF334155), innerP, outerP, strokeWidth = 8f, cap = StrokeCap.Round)
+                    drawLine(accent, innerP, outerP, strokeWidth = 2.6f, cap = StrokeCap.Round)
+                    drawCircle(Color(0xFFA7F3D0), radius = 4f, center = outerP)
+                }
+            }
+            // Central Blueprint Fabrication Core (rotated square + glowing emerald node)
+            rotate(degrees = -t * 24f, pivot = center) {
+                val coreRect = Path().apply {
+                    moveTo(sx - 18f, sy - 18f)
+                    lineTo(sx + 18f, sy - 18f)
+                    lineTo(sx + 18f, sy + 18f)
+                    lineTo(sx - 18f, sy + 18f)
+                    close()
+                }
+                drawPath(coreRect, color = accent.copy(alpha = 0.28f + 0.20f * pulse))
+                drawPath(coreRect, color = Color.White.copy(alpha = 0.9f), style = Stroke(width = 2.0f))
+            }
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.White, Color(0xFF6EE7B7), accent, Color.Transparent),
+                    center = center,
+                    radius = 18f
+                ),
+                radius = 14f * (0.88f + 0.12f * pulse),
+                center = center
+            )
+        } else {
+            // Hexagonal Exchange Citadel / Black Market Spire
+            rotate(degrees = -t * 16f, pivot = center) {
+                val hex = Path().apply {
+                    for (i in 0 until 6) {
+                        val a = i * (PI.toFloat() / 3f)
+                        val r = 58f
+                        val px = sx + cos(a) * r
+                        val py = sy + sin(a) * r
+                        if (i == 0) moveTo(px, py) else lineTo(px, py)
+                    }
+                    close()
+                }
+                drawPath(hex, color = Color(0xFF0C172B))
+                drawPath(hex, color = accent.copy(alpha = 0.92f), style = Stroke(width = 3.2f))
+
+                for (i in 0 until 3) {
+                    drawArc(
+                        color = accent.copy(alpha = 0.72f),
+                        startAngle = i * 120f + 16f,
+                        sweepAngle = 72f,
+                        useCenter = false,
+                        topLeft = Offset(sx - 68f, sy - 68f),
+                        size = Size(136f, 136f),
+                        style = Stroke(width = 3.2f, cap = StrokeCap.Round)
+                    )
+                }
+            }
+            // Central Holographic Trade Diamond
+            val diamond = Path().apply {
+                moveTo(sx, sy - 24f)
+                lineTo(sx + 20f, sy)
+                lineTo(sx, sy + 24f)
+                lineTo(sx - 20f, sy)
+                close()
+            }
+            drawPath(diamond, color = accent.copy(alpha = 0.35f + 0.25f * pulse))
+            drawPath(diamond, color = Color.White, style = Stroke(width = 2.2f))
+            drawCircle(color = accent, radius = 7f, center = center)
+        }
+
+        // Crisp Localized Station Label & Hint
+        val labelText = GameStrings.stationCanvasName(station, engine.language)
+        val labelY = sy + 92f
+        popupPaint.textSize = 13.5f
+        popupPaint.color = android.graphics.Color.argb(235, 4, 7, 17)
+        nativeCanvas.drawText(labelText, sx + 1.2f, labelY + 1.2f, popupPaint)
+        val rgb = (station.accentColorHex and 0xFFFFFF).toInt()
+        popupPaint.color = android.graphics.Color.rgb((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)
+        nativeCanvas.drawText(labelText, sx, labelY, popupPaint)
+
+        if (isNear) {
+            popupPaint.textSize = 11f
+            popupPaint.color = android.graphics.Color.rgb(226, 232, 240)
+            nativeCanvas.drawText(GameStrings.of(engine.language).canvasTapDockHint, sx, labelY + 16f, popupPaint)
+        }
+    }
+}
+
+/**
+ * Renders tiered mineable crystal/ore resource nodes + active mining laser beam & harvest ring.
+ */
+private fun DrawScope.drawResourceNodes(
+    engine: SpaceGameEngine,
+    popupPaint: Paint,
+    minX: Float,
+    maxX: Float,
+    minY: Float,
+    maxY: Float
+) {
+    if (engine.resourceNodes.isEmpty()) return
+    val miningId = engine.activeMiningNodeId
+    val nativeCanvas = drawContext.canvas.nativeCanvas
+
+    for (node in engine.resourceNodes) {
+        val nx = node.x
+        val ny = node.y
+        if (nx + 70f < minX || nx - 70f > maxX || ny + 70f < minY || ny - 70f > maxY) {
+            continue
+        }
+        val center = Offset(nx, ny)
+        val res = node.resourceType
+        val color = Color(res.colorHex)
+        val pulse = 0.74f + 0.26f * sin(node.pulsePhase)
+        val r = node.radius
+
+        // Soft glowing aura (extra radiant for Yellow Crystal)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    color.copy(alpha = if (res.isYellowCrystal) 0.48f * pulse else 0.28f * pulse),
+                    color.copy(alpha = 0.08f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = r * (if (res.isYellowCrystal) 2.35f else 1.85f)
+            ),
+            radius = r * (if (res.isYellowCrystal) 2.35f else 1.85f),
+            center = center
+        )
+
+        // Faceted crystal cluster geometry
+        rotate(degrees = (node.rotationRad * 180f / PI.toFloat()), pivot = center) {
+            val sides = if (res.isYellowCrystal) 6 else 5
+            val rockPath = Path().apply {
+                for (i in 0 until sides) {
+                    val a = i * (2f * PI.toFloat() / sides)
+                    val vr = r * (if (i % 2 == 0) 1.0f else 0.72f)
+                    val px = nx + cos(a) * vr
+                    val py = ny + sin(a) * vr
+                    if (i == 0) moveTo(px, py) else lineTo(px, py)
+                }
+                close()
+            }
+            drawPath(rockPath, color = Color(0xFF151C2C))
+            drawPath(rockPath, color = color.copy(alpha = 0.9f), style = Stroke(width = 2.2f))
+
+            // Glowing crystal shards emerging from the asteroid
+            val shardCount = if (res.isYellowCrystal) 4 else 3
+            for (i in 0 until shardCount) {
+                val a = i * (2f * PI.toFloat() / shardCount) + 0.35f
+                val tip = Offset(nx + cos(a) * (r * 1.18f), ny + sin(a) * (r * 1.18f))
+                val left = Offset(nx + cos(a + 0.45f) * (r * 0.45f), ny + sin(a + 0.45f) * (r * 0.45f))
+                val right = Offset(nx + cos(a - 0.45f) * (r * 0.45f), ny + sin(a - 0.45f) * (r * 0.45f))
+                val shard = Path().apply {
+                    moveTo(nx, ny)
+                    lineTo(left.x, left.y)
+                    lineTo(tip.x, tip.y)
+                    lineTo(right.x, right.y)
+                    close()
+                }
+                drawPath(shard, color = color.copy(alpha = 0.78f))
+                drawPath(shard, color = Color.White.copy(alpha = 0.65f), style = Stroke(width = 1.1f))
+            }
+        }
+
+        // Core gleam
+        drawCircle(color = Color.White.copy(alpha = 0.85f * pulse), radius = r * 0.22f, center = center)
+
+        // Compact Tier tag below crystal node
+        val tag = if (res.isYellowCrystal) "★ YELLOW CRYSTAL" else "T${res.tier} ${res.displayName.uppercase()}"
+        popupPaint.textSize = 10f
+        popupPaint.color = android.graphics.Color.argb(215, 4, 7, 17)
+        nativeCanvas.drawText(tag, nx + 1f, ny + r + 15f, popupPaint)
+        val rgb = (res.colorHex and 0xFFFFFF).toInt()
+        popupPaint.color = android.graphics.Color.rgb((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)
+        nativeCanvas.drawText(tag, nx, ny + r + 14f, popupPaint)
+
+        // Active Mining Laser Beam & Radial Progress Ring
+        if (node.id == miningId && engine.player.isAlive) {
+            val shipPos = Offset(engine.player.x, engine.player.y)
+            drawLine(
+                color = color.copy(alpha = 0.35f),
+                start = shipPos,
+                end = center,
+                strokeWidth = 9f,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = Color.White.copy(alpha = 0.92f),
+                start = shipPos,
+                end = center,
+                strokeWidth = 2.6f,
+                cap = StrokeCap.Round
+            )
+        }
+        if (node.harvestProgress > 0.01f) {
+            val progR = r + 10f
+            drawArc(
+                color = color,
+                startAngle = -90f,
+                sweepAngle = 360f * node.harvestProgress,
+                useCenter = false,
+                topLeft = Offset(nx - progR, ny - progR),
+                size = Size(progR * 2f, progR * 2f),
+                style = Stroke(width = 3.6f, cap = StrokeCap.Round)
+            )
+        }
+    }
 }
 
 private fun DrawScope.drawSectorJumpGatePortals(

@@ -64,6 +64,9 @@ class GamePersistence(context: Context) {
             put("pilotName", state.pilotName ?: JSONObject.NULL)
             put("companyId", state.companyId ?: JSONObject.NULL)
             put("currentSectorId", state.currentSectorId)
+            put("rawCargo", encodeCargoMap(state.rawCargo))
+            put("refinedCargo", encodeCargoMap(state.refinedCargo))
+            put("overchargedAmmo", state.overchargedAmmo)
         }
         prefs.edit()
             .putString(KEY_SAVE_JSON, root.toString())
@@ -190,7 +193,10 @@ class GamePersistence(context: Context) {
                 companyId = PilotCompany.fromId(savedCompanyId)?.id,
                 currentSectorId = root.optString("currentSectorId", "").takeIf {
                     it in GalaxyMapGraph.sectors
-                } ?: GalaxyMapGraph.homeCityForCompany(PilotCompany.fromId(savedCompanyId))
+                } ?: GalaxyMapGraph.homeCityForCompany(PilotCompany.fromId(savedCompanyId)),
+                rawCargo = decodeCargoMap(root.optJSONObject("rawCargo")),
+                refinedCargo = decodeCargoMap(root.optJSONObject("refinedCargo")),
+                overchargedAmmo = root.optInt("overchargedAmmo", 0).coerceAtLeast(0)
             )
         } catch (_: Exception) {
             null
@@ -223,10 +229,36 @@ class GamePersistence(context: Context) {
         }
     }
 
+    private fun encodeCargoMap(cargo: Map<ResourceType, Int>): JSONObject {
+        val obj = JSONObject()
+        for ((res, qty) in cargo) {
+            if (qty > 0) obj.put(res.name, qty)
+        }
+        return obj
+    }
+
+    private fun decodeCargoMap(obj: JSONObject?): Map<ResourceType, Int> {
+        if (obj == null) return emptyMap()
+        val result = linkedMapOf<ResourceType, Int>()
+        for (res in ResourceType.entries) {
+            val qty = obj.optInt(res.name, 0)
+            if (qty > 0) result[res] = qty
+        }
+        return result
+    }
+
+    fun saveLanguage(language: GameLanguage) {
+        prefs.edit().putString(KEY_LANGUAGE, language.code).apply()
+    }
+
+    fun loadLanguage(): GameLanguage =
+        GameLanguage.fromCode(prefs.getString(KEY_LANGUAGE, GameLanguage.EN.code))
+
     companion object {
         private const val PREFS_NAME = "dark_orbit_mobile_save"
         private const val KEY_SAVE_JSON = "save_state_v2"
         private const val KEY_PILOT_NAME = "pilotName"
         private const val KEY_COMPANY_ID = "companyId"
+        private const val KEY_LANGUAGE = "app_language"
     }
 }

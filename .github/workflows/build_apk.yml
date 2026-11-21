@@ -33,6 +33,9 @@ jobs:
       - name: Generate Android platform files
         run: flutter create . --platforms=android --project-name dark_orbit_mobile
 
+      - name: Set Android app label to Orbi Space
+        run: sed -i 's/android:label="[^"]*"/android:label="Orbi Space"/g' android/app/src/main/AndroidManifest.xml
+
       - name: Install Flutter dependencies
         run: flutter pub get
 
@@ -42,7 +45,7 @@ jobs:
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dark_orbit_mobile-release-apk
+          name: orbi-space-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
       - name: Publish GitHub Release
@@ -50,5 +53,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Orbit Space v1.0.${{ github.run_number }}
+          name: Orbi Space v1.0.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk

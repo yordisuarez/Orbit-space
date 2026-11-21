@@ -29,7 +29,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _pilotNameDraft = MutableStateFlow("")
     val pilotNameDraft: StateFlow<String> = _pilotNameDraft.asStateFlow()
 
+    private val _language = MutableStateFlow(persistence.loadLanguage()).also {
+        engine.language = it.value
+    }
+    val language: StateFlow<GameLanguage> = _language.asStateFlow()
+
+    private val _isSettingsOpen = MutableStateFlow(false)
+    val isSettingsOpen: StateFlow<Boolean> = _isSettingsOpen.asStateFlow()
+
     private var hudAccumulator = 0f
+
+    fun setLanguage(lang: GameLanguage) {
+        if (_language.value == lang) return
+        _language.value = lang
+        engine.language = lang
+        persistence.saveLanguage(lang)
+    }
+
+    fun openSettings() {
+        _isSettingsOpen.value = true
+    }
+
+    fun closeSettings() {
+        _isSettingsOpen.value = false
+    }
 
     fun continueAsSavedPilot() {
         if (engine.hasRegisteredPilot) {
@@ -126,6 +149,47 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun closeHangar() {
         engine.closeHangar()
         _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun openNearbyStation() {
+        if (engine.openNearbyStation()) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun closeStation() {
+        engine.closeStation()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun refineResource(type: ResourceType, refineAll: Boolean) {
+        if (engine.refineResource(type, refineAll)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun buyMarketResource(type: ResourceType, isRefined: Boolean) {
+        if (engine.buyMarketResource(type, isRefined)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun sellMarketResource(type: ResourceType, isRefined: Boolean, sellAll: Boolean) {
+        if (engine.sellMarketResource(type, isRefined, sellAll)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun buyMarketEquipment(itemId: EquipmentItemId) {
+        if (engine.buyMarketEquipment(itemId)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun craftRecipe(recipe: CraftingRecipeId) {
+        if (engine.craftRecipe(recipe)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
     }
 
     fun switchConfig(configNumber: Int) {

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.Handyman
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.AltRoute
@@ -43,6 +44,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
@@ -248,6 +251,7 @@ fun RocketFireButton(
     onFireRocket: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = GameStrings.current()
     val isReady = !inSafeZone && cooldownRemaining <= 0.05f
     val rocketDesc = stringResource(R.string.cd_fire_rocket)
     val bgBrush = when {
@@ -287,7 +291,7 @@ fun RocketFireButton(
                     text = if (cooldownRemaining > 0.05f) {
                         "${ceil(cooldownRemaining.toDouble()).toInt()}s"
                     } else {
-                        stringResource(R.string.action_rocket)
+                        strings.ctrlRocket
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (isReady) Color.White else TacticalMuted,
@@ -298,8 +302,8 @@ fun RocketFireButton(
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (inSafeZone) stringResource(R.string.hud_weapons_locked)
-            else if (isReady) "READY" else "RELOAD",
+            text = if (inSafeZone) strings.hudSafeZone
+            else if (isReady) strings.ctrlReady else strings.ctrlReload,
             style = MaterialTheme.typography.labelSmall,
             color = if (isReady) AmberCredits else TacticalMuted
         )
@@ -376,20 +380,19 @@ fun AttackLaserButton(
                     modifier = Modifier.size(28.dp)
                 )
                 Text(
-                    text = stringResource(
-                        if (isAutoFireEnabled && !inSafeZone) R.string.action_laser_on else R.string.action_laser_off
-                    ),
+                    text = if (isAutoFireEnabled && !inSafeZone) GameStrings.current().ctrlLaserOn else GameStrings.current().ctrlFire,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (inSafeZone) TacticalMuted else Color.White
                 )
             }
         }
         Spacer(modifier = Modifier.height(4.dp))
+        val strings = GameStrings.current()
         val statusText = when {
-            inSafeZone -> stringResource(R.string.hud_weapons_locked)
-            !hasTarget -> stringResource(R.string.hud_no_target)
-            targetInRange -> stringResource(R.string.hud_in_range)
-            else -> stringResource(R.string.hud_out_of_range)
+            inSafeZone -> strings.hudSafeZone
+            !hasTarget -> strings.ctrlNoTarget
+            targetInRange -> strings.ctrlInRange
+            else -> strings.ctrlOutOfRange
         }
         val statusColor = when {
             inSafeZone -> CyanLaser
@@ -458,7 +461,7 @@ fun JumpGateButton(
                 modifier = Modifier.size(18.dp)
             )
             Text(
-                text = stringResource(R.string.action_jump_gate),
+                text = GameStrings.current().ctrlJump,
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.White,
                 fontWeight = FontWeight.ExtraBold,
@@ -475,6 +478,94 @@ fun JumpGateButton(
                     softWrap = false
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun StationInteractButton(
+    stationKind: StationKind,
+    stationName: String,
+    isBlackMarket: Boolean,
+    onInteract: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val strings = GameStrings.current()
+    val transition = rememberInfiniteTransition(label = "station_dock_pulse")
+    val pulse by transition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "station_dock_alpha"
+    )
+    val gradientColors = when {
+        stationKind == StationKind.REFINERY -> listOf(Color(0xEEFB923C), Color(0xDD9A3412), Color(0xCC2A1205))
+        stationKind == StationKind.CRAFTING -> listOf(Color(0xEE34D399), Color(0xDD047857), Color(0xCC06281E))
+        isBlackMarket -> listOf(Color(0xEEFACC15), Color(0xDDB45309), Color(0xCC271A04))
+        else -> listOf(Color(0xEE38BDF8), Color(0xDD0369A1), Color(0xCC0A192F))
+    }
+    val subLabel = when {
+        stationKind == StationKind.REFINERY -> strings.ctrlRefineryShort
+        stationKind == StationKind.CRAFTING -> strings.ctrlCraftingShort
+        isBlackMarket -> strings.ctrlBlackMarketShort
+        else -> strings.ctrlMarketShort
+    }
+    val iconVector = when (stationKind) {
+        StationKind.REFINERY -> Icons.Default.Build
+        StationKind.CRAFTING -> Icons.Default.Handyman
+        StationKind.LOCAL_MARKET -> Icons.Default.Storefront
+    }
+    val tag = when (stationKind) {
+        StationKind.REFINERY -> "dock_refinery_button"
+        StationKind.CRAFTING -> "dock_crafting_button"
+        StationKind.LOCAL_MARKET -> "dock_market_button"
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(68.dp)
+            .clip(CircleShape)
+            .background(Brush.radialGradient(colors = gradientColors))
+            .border(
+                width = (2.2f + 1.3f * pulse).dp,
+                color = Color.White.copy(alpha = 0.65f + 0.35f * pulse),
+                shape = CircleShape
+            )
+            .clickable(onClick = onInteract)
+            .testTag(tag)
+            .semantics { contentDescription = "${strings.ctrlDock} $stationName" }
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = iconVector,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = strings.ctrlDock,
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = subLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFF8FAFC),
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp,
+                maxLines = 1,
+                softWrap = false
+            )
         }
     }
 }
@@ -631,6 +722,53 @@ fun TacticalMinimap(
                         style = Stroke(width = 1.5f)
                     )
                     drawCircle(color = Color.White, radius = 2.0f, center = pOffset)
+                }
+
+                // Central Interactive Stations (Refinery & Isolated Local / Black Market)
+                for (station in engine.activeStations) {
+                    val sdx = station.worldX - playerX
+                    val sdy = station.worldY - playerY
+                    if (hypot(sdx, sdy) > viewRadius + 160f) continue
+                    val sOffset = Offset(center.x + sdx * scale, center.y + sdy * scale)
+                    val sColor = when {
+                        station.kind == StationKind.REFINERY -> Color(0xFFFB923C)
+                        station.kind == StationKind.CRAFTING -> Color(0xFF34D399)
+                        sector.isNucleus -> AmberCredits
+                        else -> CyanLaser
+                    }
+                    drawRect(
+                        color = sColor,
+                        topLeft = Offset(sOffset.x - 3.6f, sOffset.y - 3.6f),
+                        size = androidx.compose.ui.geometry.Size(7.2f, 7.2f)
+                    )
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(sOffset.x - 1.5f, sOffset.y - 1.5f),
+                        size = androidx.compose.ui.geometry.Size(3.0f, 3.0f)
+                    )
+                }
+
+                // Nearby Mineable Resource Nodes within radar radius
+                val nodeCutoffSq = (viewRadius + 150f) * (viewRadius + 150f)
+                for (node in engine.resourceNodes) {
+                    val ndx = node.x - playerX
+                    val ndy = node.y - playerY
+                    if (ndx * ndx + ndy * ndy > nodeCutoffSq) continue
+                    val nx = center.x + ndx * scale
+                    val ny = center.y + ndy * scale
+                    val nodeColor = Color(node.resourceType.colorHex)
+                    if (node.resourceType.isYellowCrystal) {
+                        drawCircle(
+                            color = nodeColor.copy(alpha = 0.38f + 0.35f * pulse),
+                            radius = 4.6f,
+                            center = Offset(nx, ny)
+                        )
+                    }
+                    drawCircle(
+                        color = nodeColor,
+                        radius = if (node.resourceType.isYellowCrystal) 2.7f else 2.0f,
+                        center = Offset(nx, ny)
+                    )
                 }
 
                 // Nearby Bonus & Cargo Boxes within 4,500-unit radar radius
@@ -843,8 +981,9 @@ fun ExpandableTacticalMapOverlay(
                     tint = sector.nodeColor,
                     modifier = Modifier.size(16.dp)
                 )
+                val strings = GameStrings.current()
                 Text(
-                    text = "SECTOR ${sector.id} • ${sector.name.uppercase()}",
+                    text = "${strings.localMapSectorPrefix} ${sector.id} • ${sector.name.uppercase()}",
                     style = MaterialTheme.typography.labelLarge,
                     color = sector.nodeColor,
                     maxLines = 1,
@@ -868,7 +1007,7 @@ fun ExpandableTacticalMapOverlay(
                     )
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
-                        text = stringResource(R.string.action_galaxy_map),
+                        text = strings.hudGalaxy,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
@@ -893,7 +1032,7 @@ fun ExpandableTacticalMapOverlay(
                     )
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
-                        text = stringResource(R.string.action_close),
+                        text = strings.actionClose,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         softWrap = false
@@ -1021,6 +1160,27 @@ fun ExpandableTacticalMapOverlay(
                         )
                     }
 
+                    // Central Interactive Stations (Refinery, Crafting Station, Local / Black Market)
+                    for (station in engine.activeStations) {
+                        val stPos = worldToCanvas(station.worldX, station.worldY)
+                        val stColor = when {
+                            station.kind == StationKind.REFINERY -> Color(0xFFFB923C)
+                            station.kind == StationKind.CRAFTING -> Color(0xFF34D399)
+                            sector.isNucleus -> AmberCredits
+                            else -> CyanLaser
+                        }
+                        drawRect(
+                            color = stColor,
+                            topLeft = Offset(stPos.x - 4.2f, stPos.y - 4.2f),
+                            size = androidx.compose.ui.geometry.Size(8.4f, 8.4f)
+                        )
+                        drawRect(
+                            color = Color.White,
+                            topLeft = Offset(stPos.x - 1.6f, stPos.y - 1.6f),
+                            size = androidx.compose.ui.geometry.Size(3.2f, 3.2f)
+                        )
+                    }
+
                     val playerPos = worldToCanvas(
                         engine.player.x.coerceIn(0f, mapSize),
                         engine.player.y.coerceIn(0f, mapSize)
@@ -1028,15 +1188,16 @@ fun ExpandableTacticalMapOverlay(
                     val px = playerPos.x
                     val py = playerPos.y
 
-                    // Faint translucent cyan 2,800-unit active ship sensor scanner range circle
-                    val scannerRadiusPx = GameConfig.ALIEN_RADAR_DETECTION_RANGE * scale
+                    // Translucent blue radar circle sized to 1 grid square total diameter (radius = 0.5 grid cell)
+                    val gridCellPx = mapSpanPx / gridSteps
+                    val scannerRadiusPx = gridCellPx * 0.5f
                     drawCircle(
-                        color = CyanLaser.copy(alpha = 0.065f),
+                        color = CyanLaser.copy(alpha = 0.08f),
                         radius = scannerRadiusPx,
                         center = playerPos
                     )
                     drawCircle(
-                        color = CyanLaser.copy(alpha = 0.34f),
+                        color = CyanLaser.copy(alpha = 0.38f),
                         radius = scannerRadiusPx,
                         center = playerPos,
                         style = Stroke(width = 1.35f)
@@ -1170,6 +1331,7 @@ fun TopTacticalHud(
     hud: HudSnapshot,
     onOpenHangar: () -> Unit,
     onOpenGalaxyMap: () -> Unit,
+    onOpenSettings: () -> Unit,
     onToggleConfig: () -> Unit,
     onSelectFormation: (DroneFormation) -> Unit,
     onCancelAutopilot: () -> Unit,
@@ -1177,6 +1339,8 @@ fun TopTacticalHud(
     onTogglePause: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val lang = LocalGameLanguage.current
+    val strings = GameStrings.of(lang)
     val pulseTransition = rememberInfiniteTransition(label = "hud_glow")
     val glowPulse by pulseTransition.animateFloat(
         initialValue = 0.55f,
@@ -1192,7 +1356,7 @@ fun TopTacticalHud(
         verticalArrangement = Arrangement.spacedBy(5.dp),
         modifier = modifier
     ) {
-        // Row 1: Credits/Kills/Level, Shield+Hull, Config, Hangar, Pause
+        // Row 1: Credits/Kills/Level, Shield+Hull, Config, Formation, Hangar, Galaxy, Settings, Pause
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1215,7 +1379,7 @@ fun TopTacticalHud(
                 )
                 Column {
                     Text(
-                        text = stringResource(R.string.hud_credits_label),
+                        text = strings.hudCredits,
                         style = MaterialTheme.typography.labelSmall,
                         color = TacticalMuted
                     )
@@ -1235,7 +1399,7 @@ fun TopTacticalHud(
 
                 Column {
                     Text(
-                        text = stringResource(R.string.hud_kills_label),
+                        text = strings.hudKills,
                         style = MaterialTheme.typography.labelSmall,
                         color = TacticalMuted
                     )
@@ -1259,7 +1423,7 @@ fun TopTacticalHud(
                 ) {
                     val xpRatio = (hud.playerXp.toFloat() / hud.playerXpToNext.coerceAtLeast(1)).coerceIn(0f, 1f)
                     Text(
-                        text = "${stringResource(R.string.hud_level_prefix)} ${hud.playerLevel}",
+                        text = "${strings.hudLevelPrefix} ${hud.playerLevel}",
                         style = MaterialTheme.typography.labelLarge,
                         color = Color(0xFFC084FC)
                     )
@@ -1296,13 +1460,13 @@ fun TopTacticalHud(
                 val hpRatio = (hud.playerHp.toFloat() / hud.playerMaxHp.coerceAtLeast(1)).coerceIn(0f, 1f)
 
                 HudVitalBarRow(
-                    label = "${stringResource(R.string.hud_shield_label)}: ${hud.playerShield} / ${hud.playerMaxShield}",
+                    label = "${strings.hudShield}: ${hud.playerShield} / ${hud.playerMaxShield}",
                     ratio = shdRatio,
                     barColor = CyanThruster,
                     tag = "hud_shield_bar"
                 )
                 HudVitalBarRow(
-                    label = "${stringResource(R.string.hud_hp_label)}: ${hud.playerHp} / ${hud.playerMaxHp}",
+                    label = "${strings.hudHp}: ${hud.playerHp} / ${hud.playerMaxHp}",
                     ratio = hpRatio,
                     barColor = if (hpRatio < 0.35f) CrimsonDanger else EmeraldHull,
                     tag = "hud_hp_bar"
@@ -1324,9 +1488,7 @@ fun TopTacticalHud(
                     .semantics { contentDescription = cfgDesc }
             ) {
                 Text(
-                    text = stringResource(
-                        if (hud.activeConfig == 1) R.string.hud_config_1 else R.string.hud_config_2
-                    ),
+                    text = if (hud.activeConfig == 1) strings.hudConfig1 else strings.hudConfig2,
                     style = MaterialTheme.typography.labelLarge,
                     color = cfgColor
                 )
@@ -1528,7 +1690,7 @@ fun TopTacticalHud(
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = stringResource(R.string.action_hangar),
+                    text = strings.hudHangar,
                     style = MaterialTheme.typography.labelLarge,
                     color = if (hud.inSafeZone) CyanLaser else TacticalWhite
                 )
@@ -1567,11 +1729,27 @@ fun TopTacticalHud(
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = stringResource(R.string.action_galaxy_map),
+                    text = strings.hudGalaxy,
                     style = MaterialTheme.typography.labelLarge,
                     color = CyanLaser,
                     maxLines = 1,
                     softWrap = false
+                )
+            }
+
+            IconButton(
+                onClick = onOpenSettings,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SpaceHudPanel)
+                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
+                    .testTag("settings_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = strings.hudSettings,
+                    tint = CyanLaser
                 )
             }
 
@@ -1620,9 +1798,9 @@ fun TopTacticalHud(
             }
 
             val zoneLabel = when {
-                hud.isTakingZoneRadiation -> stringResource(R.string.hud_radiation_warning)
-                hud.inSafeZone -> if (activeSector.isNucleus) "BLACK MARKET • SAFE" else stringResource(R.string.hud_safe_zone)
-                else -> activeSector.zoneType.shortLabel
+                hud.isTakingZoneRadiation -> strings.hudRadiationWarning
+                hud.inSafeZone -> if (activeSector.isNucleus) strings.hudSafeZoneBlackMarket else strings.hudSafeZone
+                else -> GameStrings.zoneShortLabel(activeSector.zoneType, lang)
             }
             val zoneColor = when {
                 hud.isTakingZoneRadiation -> CrimsonDanger
@@ -1663,6 +1841,47 @@ fun TopTacticalHud(
                 )
             }
 
+            if (hud.overchargedAmmo > 0) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xCC1E1B08))
+                        .border(1.dp, AmberCredits.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("plasma_ammo_badge")
+                ) {
+                    Text(
+                        text = "${strings.hudOverchargePrefix} ×${hud.overchargedAmmo}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberCredits,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (hud.miningNodeName != null && hud.miningProgress > 0f) {
+                val pct = (hud.miningProgress * 100f).toInt().coerceIn(0, 100)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xCC1E1B08))
+                        .border(1.dp, AmberCredits.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("mining_progress_badge")
+                ) {
+                    Text(
+                        text = "${strings.hudMiningPrefix} ${hud.miningNodeName.uppercase()} $pct%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberCredits,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
             val nextHop = hud.nextRouteHopSectorId
             if (nextHop != null) {
                 Row(
@@ -1683,7 +1902,7 @@ fun TopTacticalHud(
                         modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = "ROUTE → $nextHop",
+                        text = "${strings.hudRoutePrefix} $nextHop",
                         style = MaterialTheme.typography.labelSmall,
                         color = CyanLaser,
                         fontWeight = FontWeight.Bold
@@ -1718,9 +1937,9 @@ fun TopTacticalHud(
 
             if (hud.inRadiationWarning) {
                 val radText = if (hud.isTakingZoneRadiation && hud.requiredChipWarning != null) {
-                    "RADIATION • NEED ${hud.requiredChipWarning}"
+                    "${strings.hudRadiationNeedPrefix} ${hud.requiredChipWarning}"
                 } else {
-                    stringResource(R.string.hud_radiation_warning)
+                    strings.hudRadiationWarning
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1767,7 +1986,7 @@ fun TopTacticalHud(
                         modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = stringResource(R.string.hud_autopilot_badge),
+                        text = strings.hudAutopilotBadge,
                         style = MaterialTheme.typography.labelSmall,
                         color = CyanLaser,
                         maxLines = 1,
@@ -1798,6 +2017,8 @@ private fun HudMissionTracker(
     glowPulse: Float,
     onClaimMission: () -> Unit
 ) {
+    val lang = LocalGameLanguage.current
+    val strings = GameStrings.of(lang)
     val active = mission.activeMission
     val claimDesc = stringResource(R.string.cd_claim_mission)
 
@@ -1819,13 +2040,15 @@ private fun HudMissionTracker(
                 modifier = Modifier.size(14.dp)
             )
             Text(
-                text = stringResource(R.string.hud_missions_complete),
+                text = strings.hudAllMissionsComplete,
                 style = MaterialTheme.typography.labelSmall,
                 color = EmeraldHull
             )
         }
         return
     }
+
+    val activeDesc = GameStrings.missionDescription(active, lang)
 
     when {
         mission.isReadyToClaim -> {
@@ -1848,7 +2071,7 @@ private fun HudMissionTracker(
                     modifier = Modifier.size(15.dp)
                 )
                 Text(
-                    text = "${active.code}: ${active.description} (${active.targetCount}/${active.targetCount})",
+                    text = "${active.code}: $activeDesc (${active.targetCount}/${active.targetCount})",
                     style = MaterialTheme.typography.labelSmall,
                     color = TacticalWhite,
                     maxLines = 1,
@@ -1861,7 +2084,7 @@ private fun HudMissionTracker(
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = stringResource(R.string.hud_mission_claim),
+                        text = strings.hudMissionClaim,
                         style = MaterialTheme.typography.labelSmall,
                         color = SpaceVoid,
                         maxLines = 1,
@@ -1889,7 +2112,7 @@ private fun HudMissionTracker(
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
-                    text = "${active.code} LOCKED — REACH LEVEL ${active.requiredLevel} TO UNLOCK",
+                    text = "${active.code} • ${strings.hudNeedLevelPrefix} ${active.requiredLevel}",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFFE9D5FF),
                     maxLines = 1,
@@ -1921,7 +2144,7 @@ private fun HudMissionTracker(
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
-                    text = "${stringResource(R.string.hud_mission_prefix)}: ${active.description} (${mission.currentMissionProgress}/${active.targetCount})",
+                    text = "${strings.hudMissionPrefix} $activeDesc (${mission.currentMissionProgress}/${active.targetCount})",
                     style = MaterialTheme.typography.labelSmall,
                     color = TacticalWhite,
                     maxLines = 1,

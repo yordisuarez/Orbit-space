@@ -154,7 +154,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                     Row(
                       children: <Widget>[
                         const Text(
-                          'STARBASE HANGAR',
+                          'ORBI SPACE HANGAR',
                           maxLines: 1,
                           softWrap: false,
                           style: TextStyle(

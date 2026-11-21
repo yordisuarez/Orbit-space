@@ -105,6 +105,8 @@ fun GalaxyMapOverlay(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val lang = LocalGameLanguage.current
+    val strings = GameStrings.of(lang)
     val infiniteTransition = rememberInfiniteTransition(label = "galaxy_map_anim")
     val animPhase by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -264,7 +266,7 @@ fun GalaxyMapOverlay(
                     )
                     Column {
                         Text(
-                            text = stringResource(R.string.galaxy_map_title),
+                            text = strings.galaxyMapTitle,
                             style = MaterialTheme.typography.labelLarge,
                             color = Color(0xFFE0F2FE),
                             fontWeight = FontWeight.Bold,
@@ -272,7 +274,7 @@ fun GalaxyMapOverlay(
                             softWrap = false
                         )
                         Text(
-                            text = "CURRENT: ${GalaxyMapGraph.sectorOf(currentSectorId).id} • ${GalaxyMapGraph.sectorOf(currentSectorId).zoneType.shortLabel}",
+                            text = "${strings.galaxyCurrentPrefix} ${GalaxyMapGraph.sectorOf(currentSectorId).id} • ${GameStrings.zoneShortLabel(GalaxyMapGraph.sectorOf(currentSectorId).zoneType, lang)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = GalaxyMapGraph.sectorOf(currentSectorId).zoneType.badgeColor,
                             maxLines = 1,
@@ -285,7 +287,7 @@ fun GalaxyMapOverlay(
 
                 GalaxyHeaderChip(
                     icon = Icons.Default.Radar,
-                    label = stringResource(R.string.action_local_map),
+                    label = strings.galaxyLocalMap,
                     accent = Color(0xFF38BDF8),
                     tag = "galaxy_to_local_button",
                     onClick = onSwitchToLocalMap
@@ -293,7 +295,7 @@ fun GalaxyMapOverlay(
 
                 GalaxyHeaderChip(
                     icon = Icons.Default.CenterFocusStrong,
-                    label = stringResource(R.string.action_reset_zoom),
+                    label = strings.galaxyResetZoom,
                     accent = Color(0xFF94A3B8),
                     tag = "galaxy_reset_zoom_button",
                     onClick = {
@@ -320,7 +322,7 @@ fun GalaxyMapOverlay(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = stringResource(R.string.action_close),
+                        text = strings.actionClose,
                         style = MaterialTheme.typography.labelLarge,
                         maxLines = 1,
                         softWrap = false
@@ -338,11 +340,11 @@ fun GalaxyMapOverlay(
                     .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
                     .padding(horizontal = 10.dp, vertical = 7.dp)
             ) {
-                LegendEntry(Color(0xFF38BDF8), "C1 Blue • C2 Green • C3 Red (Safe Cities)")
-                LegendEntry(Color(0xFF4ADE80), "Outer Ring R1–R3 (Tier 1–2)")
-                LegendEntry(Color(0xFFFB923C), "Inner Ring 1-2/2-2/3-2 (Tier 3–4)")
-                LegendEntry(Color(0xFFFACC15), "Yellow Ring & 0-0 Nucleus (Tier 4–5)")
-                LegendEntry(Color(0xFF34D399), "Dashed Links = Border Shortcuts")
+                LegendEntry(Color(0xFF38BDF8), strings.galaxyLegendCities)
+                LegendEntry(Color(0xFF4ADE80), strings.galaxyLegendOuter)
+                LegendEntry(Color(0xFFFB923C), strings.galaxyLegendInner)
+                LegendEntry(Color(0xFFFACC15), strings.galaxyLegendNucleus)
+                LegendEntry(Color(0xFF34D399), strings.galaxyLegendShortcuts)
             }
 
             // Active plotted route strip (top-left below header)
@@ -367,7 +369,7 @@ fun GalaxyMapOverlay(
                     )
                     Column(modifier = Modifier.widthIn(max = 220.dp)) {
                         Text(
-                            text = "ROUTE (${plottedRoute.size - 1} JUMPS) • NEXT: ${plottedRoute[1]}",
+                            text = "${strings.galaxyRouteWord} (${plottedRoute.size - 1} ${strings.galaxyJumpsWord}) • ${strings.galaxyNextPrefix} ${plottedRoute[1]}",
                             style = MaterialTheme.typography.labelSmall,
                             color = CyanLaser,
                             fontWeight = FontWeight.Bold,
@@ -393,7 +395,7 @@ fun GalaxyMapOverlay(
                             .testTag("galaxy_fly_to_gate_button")
                     ) {
                         Text(
-                            text = stringResource(R.string.action_fly_to_gate),
+                            text = strings.galaxyFlyToGate,
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFF040A16),
                             fontWeight = FontWeight.ExtraBold,
@@ -511,6 +513,8 @@ private fun SectorInfoCard(
     onFlyToNextGate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val lang = LocalGameLanguage.current
+    val strings = GameStrings.of(lang)
     val accent = sector.nodeColor
     Column(
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -550,7 +554,7 @@ private fun SectorInfoCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = sector.zoneType.shortLabel,
+                    text = GameStrings.zoneShortLabel(sector.zoneType, lang),
                     style = MaterialTheme.typography.labelSmall,
                     color = sector.zoneType.badgeColor,
                     maxLines = 1,
@@ -559,7 +563,7 @@ private fun SectorInfoCard(
             }
             if (isCurrentSector) {
                 Text(
-                    text = "YOU",
+                    text = strings.galaxyYouBadge,
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFF040A16),
                     fontWeight = FontWeight.ExtraBold,
@@ -574,22 +578,22 @@ private fun SectorInfoCard(
         InfoDetailRow(
             icon = Icons.Default.Security,
             iconColor = if (sector.hasCentralSafeZone) CyanLaser else AmberCredits,
-            label = sector.safeZoneStatusLabel
+            label = GameStrings.safeZoneStatus(sector, lang)
         )
         InfoDetailRow(
             icon = Icons.Default.Hub,
             iconColor = accent,
-            label = "Resources: ${sector.resourceTiers}"
+            label = "${strings.galaxyResourcesPrefix} ${sector.resourceTiers}"
         )
         InfoDetailRow(
             icon = Icons.Default.Navigation,
             iconColor = TacticalMuted,
-            label = "Gates: ${sector.connectedSectorIds.joinToString(", ")}"
+            label = "${strings.galaxyGatesPrefix} ${sector.connectedSectorIds.joinToString(", ")}"
         )
 
         if (!isCurrentSector && routeToSelected.size >= 2) {
             Text(
-                text = "Path (${routeToSelected.size - 1} jumps): ${routeToSelected.joinToString(" → ")}",
+                text = "${strings.galaxyPathWord} (${routeToSelected.size - 1} ${strings.galaxyJumpsWord.lowercase()}): ${routeToSelected.joinToString(" → ")}",
                 style = MaterialTheme.typography.labelSmall,
                 color = CyanLaser,
                 maxLines = 2,
@@ -615,7 +619,7 @@ private fun SectorInfoCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (isRoutePlotted) "PLOTTED" else stringResource(R.string.action_plot_route),
+                        text = if (isRoutePlotted) strings.galaxyPlotted else strings.galaxyPlotRoute,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,

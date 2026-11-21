@@ -20,6 +20,7 @@ class SpaceGameEngine(
     val player = PlayerState()
     val aliens = mutableListOf<AlienEntity>()
     val lootBoxes = mutableListOf<LootBoxEntity>()
+    val resourceNodes = mutableListOf<ResourceNodeEntity>()
     val lasers = mutableListOf<LaserBolt>()
     val rockets = mutableListOf<HomingRocket>()
     val particles = mutableListOf<ExplosionParticle>()
@@ -37,8 +38,69 @@ class SpaceGameEngine(
     val currentSector: SectorNode
         get() = GalaxyMapGraph.sectorOf(currentSectorId)
 
-    var activePortals: List<SectorPortal> = GalaxyMapGraph.portalsForSector(GalaxyMapGraph.DEFAULT_SECTOR_ID)
+    var activePortals: List<SectorPortal> = buildBorderPortalsForSector(GalaxyMapGraph.DEFAULT_SECTOR_ID)
         private set
+
+    var activeStations: List<SectorStation> = buildStationsForSector(GalaxyMapGraph.DEFAULT_SECTOR_ID)
+        private set
+
+    // Player resource cargo (raw ores & refined goods)
+    val rawCargo: MutableMap<ResourceType, Int> = linkedMapOf()
+    val refinedCargo: MutableMap<ResourceType, Int> = linkedMapOf()
+
+    // Strictly isolated local markets keyed independently by sectorId ("C1", "C2", "C3", "0-0")
+    private class MutableMarketResourceEntry(
+        val resourceType: ResourceType,
+        val isRefined: Boolean,
+        var buyPrice: Int,
+        var sellPrice: Int,
+        var localStock: Int
+    )
+
+    private class MutableMarketEquipmentEntry(
+        val itemId: EquipmentItemId,
+        var buyPrice: Int,
+        var localStock: Int
+    )
+
+    private class IsolatedLocalMarket(
+        val sectorId: String,
+        val marketName: String,
+        val isBlackMarket: Boolean,
+        val resourceEntries: MutableMap<Pair<ResourceType, Boolean>, MutableMarketResourceEntry>,
+        val equipmentEntries: MutableList<MutableMarketEquipmentEntry>
+    ) {
+        fun toSnapshot(): LocalMarketSnapshot = LocalMarketSnapshot(
+            sectorId = sectorId,
+            marketName = marketName,
+            isBlackMarket = isBlackMarket,
+            resourceListings = resourceEntries.values.map {
+                MarketResourceListing(
+                    resourceType = it.resourceType,
+                    isRefined = it.isRefined,
+                    buyPrice = it.buyPrice,
+                    sellPrice = it.sellPrice,
+                    localStock = it.localStock
+                )
+            },
+            equipmentListings = equipmentEntries.map {
+                MarketEquipmentListing(
+                    itemId = it.itemId,
+                    buyPrice = it.buyPrice,
+                    localStock = it.localStock
+                )
+            }
+        )
+    }
+
+    private val isolatedLocalMarkets: MutableMap<String, IsolatedLocalMarket> = createIsolatedLocalMarkets()
+
+    var activeStationOverlay: StationKind? = null
+        private set
+
+    var activeMiningNodeId: Int? = null
+        private set
+    private var nextResourceNodeId: Int = 1
 
     var plottedRoute: List<String> = emptyList()
         private set
@@ -119,6 +181,9 @@ class SpaceGameEngine(
         private set
     var kills: Int = 0
         private set
+    var overchargedAmmo: Int = 0
+        private set
+    var language: GameLanguage = GameLanguage.EN
     var isPaused: Boolean = false
         private set
     var isHangarOpen: Boolean = false
@@ -200,7 +265,10 @@ class SpaceGameEngine(
             currentMissionProgress = currentMissionProgress,
             pilotName = pilotName,
             companyId = pilotCompany?.id,
-            currentSectorId = currentSectorId
+            currentSectorId = currentSectorId,
+            rawCargo = rawCargo.filterValues { it > 0 }.toMap(),
+            refinedCargo = refinedCargo.filterValues { it > 0 }.toMap(),
+            overchargedAmmo = overchargedAmmo
         )
     }
 
@@ -307,6 +375,16 @@ class SpaceGameEngine(
             0
         }
 
+        rawCargo.clear()
+        for ((res, qty) in state.rawCargo) {
+            if (qty > 0) rawCargo[res] = qty
+        }
+        refinedCargo.clear()
+        for ((res, qty) in state.refinedCargo) {
+            if (qty > 0) refinedCargo[res] = qty
+        }
+        overchargedAmmo = state.overchargedAmmo.coerceAtLeast(0)
+
         recalculateShipStats(refillVitals = true)
         val restoredSector = if (state.currentSectorId in GalaxyMapGraph.sectors) {
             state.currentSectorId
@@ -361,6 +439,11 @@ class SpaceGameEngine(
             config2LaserSlots[0] = starterLaser
             config2ShieldSlots[0] = starterShield
             equippedSectorChip = starterChip
+            rawCargo.clear()
+            refinedCargo.clear()
+            overchargedAmmo = 0
+            isolatedLocalMarkets.clear()
+            isolatedLocalMarkets.putAll(createIsolatedLocalMarkets())
         }
         recalculateShipStats(refillVitals = true)
 
@@ -383,6 +466,7 @@ class SpaceGameEngine(
         isHangarOpen = false
         isTacticalMapOpen = false
         isGalaxyMapOpen = false
+        activeStationOverlay = null
         autopilotTargetX = null
         autopilotTargetY = null
 
@@ -427,6 +511,20 @@ class SpaceGameEngine(
 
     fun isPlayerNearJumpGate(): Boolean = nearestJumpPortal() != null
 
+    fun nearestStation(): SectorStation? {
+        if (!player.isAlive) return null
+        var best: SectorStation? = null
+        var bestDist = Float.MAX_VALUE
+        for (station in activeStations) {
+            val d = hypot(player.x - station.worldX, player.y - station.worldY)
+            if (d <= station.interactRadius && d < bestDist) {
+                bestDist = d
+                best = station
+            }
+        }
+        return best
+    }
+
     private fun enterSector(
         targetSectorId: String,
         fromSectorId: String?,
@@ -435,7 +533,10 @@ class SpaceGameEngine(
     ) {
         val sector = GalaxyMapGraph.sectorOf(targetSectorId)
         currentSectorId = sector.id
-        activePortals = GalaxyMapGraph.portalsForSector(sector.id)
+        activePortals = buildBorderPortalsForSector(sector.id)
+        activeStations = buildStationsForSector(sector.id)
+        activeStationOverlay = null
+        activeMiningNodeId = null
         sectorStars = generateSectorStars(sector.id)
         sectorNebulae = generateSectorNebulae(sector.id)
 
@@ -508,6 +609,110 @@ class SpaceGameEngine(
         }
     }
 
+    /**
+     * Positions every jump portal along the square map border (10% inward margin from all edges),
+     * aligned to the direction angle from the current sector to each connected destination sector,
+     * keeping the central play area and Nucleus Black Market completely clear.
+     */
+    private fun buildBorderPortalsForSector(sectorId: String): List<SectorPortal> {
+        val current = GalaxyMapGraph.sectorOf(sectorId)
+        val mapSize = current.mapSize
+        val half = mapSize * 0.5f
+        val margin = mapSize * 0.10f
+        val borderHalf = half - margin
+
+        val placedAngles = mutableListOf<Double>()
+        val portals = mutableListOf<SectorPortal>()
+
+        for ((index, neighborId) in current.connectedSectorIds.withIndex()) {
+            val neighbor = GalaxyMapGraph.sectorOf(neighborId)
+            val dx = (neighbor.position.x - current.position.x).toDouble()
+            val dy = (neighbor.position.y - current.position.y).toDouble()
+            var angle = if (dx == 0.0 && dy == 0.0) {
+                index * (2.0 * PI / max(1, current.connectedSectorIds.size))
+            } else {
+                atan2(dy, dx)
+            }
+
+            // Prevent overlapping portals if two neighbors share a near-identical bearing
+            for (existingAngle in placedAngles) {
+                var diff = angle - existingAngle
+                while (diff > PI) diff -= 2.0 * PI
+                while (diff < -PI) diff += 2.0 * PI
+                if (abs(diff) < 0.22) {
+                    angle += 0.26
+                }
+            }
+            placedAngles.add(angle)
+
+            val ux = cos(angle)
+            val uy = sin(angle)
+            val scale = borderHalf / max(abs(ux), abs(uy)).coerceAtLeast(1e-6)
+            val px = (half + ux * scale).toFloat().coerceIn(margin, mapSize - margin)
+            val py = (half + uy * scale).toFloat().coerceIn(margin, mapSize - margin)
+            val shortcut = current.isShortcutTo(neighborId)
+
+            portals.add(
+                SectorPortal(
+                    targetSectorId = neighborId,
+                    worldX = px,
+                    worldY = py,
+                    isShortcut = shortcut,
+                    accentColorHex = if (shortcut) 0xFF34D399 else neighbor.nodeColorHex
+                )
+            )
+        }
+        return portals
+    }
+
+    /**
+     * Places central stations inside the Safe Zone of each Capital City (C1, C2, C3:
+     * Refinery, Local Market, and Crafting Station) and Nucleus (0-0: Refinery & Black Market).
+     */
+    private fun buildStationsForSector(sectorId: String): List<SectorStation> {
+        val sector = GalaxyMapGraph.sectorOf(sectorId)
+        if (!sector.hasCentralStations) return emptyList()
+        val half = sector.mapSize * 0.5f
+        val offset = if (sector.isNucleus) 285f else 245f
+        val topY = if (sector.isCapitalCity) half - 115f else half - 30f
+        val marketLabel = if (sector.isNucleus) "BLACK MARKET" else "${sector.id} LOCAL MARKET"
+        val marketAccent = if (sector.isNucleus) 0xFFFACC15 else sector.nodeColorHex
+        val stations = mutableListOf(
+            SectorStation(
+                kind = StationKind.REFINERY,
+                sectorId = sector.id,
+                name = "${sector.id} REFINERY",
+                worldX = half - offset,
+                worldY = topY,
+                interactRadius = 175f,
+                accentColorHex = 0xFFFB923C
+            ),
+            SectorStation(
+                kind = StationKind.LOCAL_MARKET,
+                sectorId = sector.id,
+                name = marketLabel,
+                worldX = half + offset,
+                worldY = topY,
+                interactRadius = 175f,
+                accentColorHex = marketAccent
+            )
+        )
+        if (sector.isCapitalCity) {
+            stations.add(
+                SectorStation(
+                    kind = StationKind.CRAFTING,
+                    sectorId = sector.id,
+                    name = "${sector.id} CRAFTING",
+                    worldX = half,
+                    worldY = half + 215f,
+                    interactRadius = 175f,
+                    accentColorHex = 0xFF34D399
+                )
+            )
+        }
+        return stations
+    }
+
     private fun resolveSpaceZoneForSector(sector: SectorNode, inSafe: Boolean): SpaceZone {
         if (inSafe) return SpaceZone.SAFE_ZONE
         return when (sector.zoneType) {
@@ -527,11 +732,13 @@ class SpaceGameEngine(
         popups.clear()
         aliens.clear()
         lootBoxes.clear()
+        resourceNodes.clear()
+        activeMiningNodeId = null
 
         val sector = currentSector
         if (sector.isEntireSectorSafe) {
-            // Capital Cities have no hostile NPCs, only occasional supply boxes outside the central hub
-            repeat(12) { spawnBonusBox() }
+            // Capital Cities have no hostile NPCs and no raw resource nodes
+            repeat(10) { spawnBonusBox() }
             return
         }
 
@@ -539,30 +746,91 @@ class SpaceGameEngine(
             GalaxyZoneType.SAFE_ZONE -> {
                 repeat(16) { spawnAlienForTier(AlienTier.SCOUT, minDistanceFromPlayer = 700f) }
                 repeat(6) { spawnAlienForTier(AlienTier.HUNTER, minDistanceFromPlayer = 800f) }
-                repeat(38) { spawnBonusBox() }
+                repeat(36) { spawnBonusBox() }
+                repeat(28) { spawnResourceNodeForActiveSector() }
             }
             GalaxyZoneType.INTERMEDIATE_ZONE -> {
                 repeat(16) { spawnAlienForTier(AlienTier.SCOUT, minDistanceFromPlayer = 680f) }
                 repeat(12) { spawnAlienForTier(AlienTier.HUNTER, minDistanceFromPlayer = 720f) }
-                repeat(44) { spawnBonusBox() }
+                repeat(42) { spawnBonusBox() }
+                repeat(32) { spawnResourceNodeForActiveSector() }
             }
             GalaxyZoneType.MODERATE_ZONE -> {
                 repeat(14) { spawnAlienForTier(AlienTier.HUNTER, minDistanceFromPlayer = 720f) }
                 repeat(14) { spawnAlienForTier(AlienTier.DESTROYER, minDistanceFromPlayer = 780f) }
-                repeat(46) { spawnBonusBox() }
+                repeat(44) { spawnBonusBox() }
+                repeat(34) { spawnResourceNodeForActiveSector() }
             }
             GalaxyZoneType.HIGH_RISK_YELLOW_RING -> {
                 repeat(14) { spawnAlienForTier(AlienTier.DESTROYER, minDistanceFromPlayer = 760f) }
                 repeat(10) { spawnAlienForTier(AlienTier.DREADNOUGHT_BOSS, minDistanceFromPlayer = 860f) }
-                repeat(54) { spawnBonusBox() }
+                repeat(50) { spawnBonusBox() }
+                repeat(38) { spawnResourceNodeForActiveSector() }
             }
             GalaxyZoneType.NUCLEUS -> {
-                repeat(16) { spawnAlienForTier(AlienTier.DESTROYER, minDistanceFromPlayer = 900f) }
-                repeat(18) { spawnAlienForTier(AlienTier.DREADNOUGHT_BOSS, minDistanceFromPlayer = 960f) }
-                repeat(75) { spawnBonusBox() }
+                repeat(18) { spawnAlienForTier(AlienTier.DESTROYER, minDistanceFromPlayer = 900f) }
+                repeat(20) { spawnAlienForTier(AlienTier.DREADNOUGHT_BOSS, minDistanceFromPlayer = 960f) }
+                repeat(80) { spawnBonusBox() }
+                repeat(68) { spawnResourceNodeForActiveSector() }
             }
             GalaxyZoneType.CAPITAL_CITY -> Unit
         }
+    }
+
+    private fun spawnResourceNodeForActiveSector() {
+        val sector = currentSector
+        if (sector.isCapitalCity) return
+
+        val resourceType: ResourceType = when (sector.zoneType) {
+            GalaxyZoneType.SAFE_ZONE, GalaxyZoneType.INTERMEDIATE_ZONE -> {
+                val tier = if (random.nextFloat() < 0.56f) 1 else 2
+                ResourceType.forRegionAndTier(sector.nativeCityId, tier)
+            }
+            GalaxyZoneType.MODERATE_ZONE -> {
+                val tier = if (random.nextFloat() < 0.54f) 3 else 4
+                ResourceType.forRegionAndTier(sector.nativeCityId, tier)
+            }
+            GalaxyZoneType.HIGH_RISK_YELLOW_RING -> {
+                if (random.nextFloat() < 0.36f) {
+                    ResourceType.YELLOW_CRYSTAL
+                } else {
+                    val tier = if (random.nextFloat() < 0.50f) 4 else 5
+                    ResourceType.forRegionAndTier(sector.nativeCityId, tier)
+                }
+            }
+            GalaxyZoneType.NUCLEUS -> {
+                if (random.nextFloat() < 0.50f) {
+                    ResourceType.YELLOW_CRYSTAL
+                } else {
+                    val regionCities = arrayOf("C1", "C2", "C3")
+                    val region = regionCities[random.nextInt(regionCities.size)]
+                    val tier = if (random.nextFloat() < 0.42f) 4 else 5
+                    ResourceType.forRegionAndTier(region, tier)
+                }
+            }
+            GalaxyZoneType.CAPITAL_CITY -> return
+        }
+
+        // Always spawn outside the central safe zone (crucial for Nucleus 0-0)
+        val (nx, ny) = randomPointInActiveSector(margin = 420f, safeZoneBuffer = 260f)
+        val yieldAmt = if (resourceType.isYellowCrystal) 2 else (2 + random.nextInt(2))
+        val radius = when {
+            resourceType.isYellowCrystal -> 26f
+            resourceType.tier >= 4 -> 23f
+            else -> 20f
+        }
+        resourceNodes.add(
+            ResourceNodeEntity(
+                id = nextResourceNodeId++,
+                resourceType = resourceType,
+                x = nx,
+                y = ny,
+                yieldAmount = yieldAmt,
+                radius = radius,
+                rotationRad = random.nextFloat() * 2f * PI.toFloat(),
+                pulsePhase = random.nextFloat() * 6.28f
+            )
+        )
     }
 
     fun triggerJumpGate(): Boolean {
@@ -688,6 +956,7 @@ class SpaceGameEngine(
         if (!player.isAlive) return
         isTacticalMapOpen = false
         isGalaxyMapOpen = false
+        activeStationOverlay = null
         isHangarOpen = true
         isPaused = true
     }
@@ -699,8 +968,305 @@ class SpaceGameEngine(
         requestSave()
     }
 
+    fun openNearbyStation(): Boolean {
+        if (!player.isAlive || isHangarOpen || isPaused) return false
+        val station = nearestStation() ?: return false
+        isTacticalMapOpen = false
+        isGalaxyMapOpen = false
+        autopilotTargetX = null
+        autopilotTargetY = null
+        activeStationOverlay = station.kind
+        return true
+    }
+
+    fun closeStation() {
+        activeStationOverlay = null
+        requestSave()
+    }
+
+    /**
+     * Enforces the Clockwise City Refining Loop:
+     * Only raw resources whose [ResourceType.refinesInSectorId] matches [currentSectorId]
+     * can be refined at this station (2 raw -> 1 refined).
+     */
+    fun refineResource(type: ResourceType, refineAll: Boolean): Boolean {
+        if (activeStationOverlay != StationKind.REFINERY) return false
+        if (type.refinesInSectorId != currentSectorId) return false
+        val ownedRaw = rawCargo[type] ?: 0
+        val batches = if (refineAll) {
+            ownedRaw / ResourceType.RAW_REQUIRED_PER_REFINE
+        } else {
+            if (ownedRaw >= ResourceType.RAW_REQUIRED_PER_REFINE) 1 else 0
+        }
+        if (batches <= 0) return false
+
+        val remainingRaw = ownedRaw - batches * ResourceType.RAW_REQUIRED_PER_REFINE
+        if (remainingRaw > 0) {
+            rawCargo[type] = remainingRaw
+        } else {
+            rawCargo.remove(type)
+        }
+        refinedCargo[type] = (refinedCargo[type] ?: 0) + batches
+        popups.add(
+            FloatingPopup(
+                x = player.x,
+                y = player.y - activeShipClass.hullRadius - 26f,
+                text = "REFINED +$batches ${type.refinedName}",
+                life = 1.55f,
+                maxLife = 1.55f,
+                colorRgb = (type.colorHex and 0xFFFFFF).toInt()
+            )
+        )
+        requestSave()
+        return true
+    }
+
+    /**
+     * Buys 1 unit of a resource from the CURRENT sector's strictly isolated Local Market.
+     * Mutates ONLY [isolatedLocalMarkets][currentSectorId].
+     */
+    fun buyMarketResource(type: ResourceType, isRefined: Boolean): Boolean {
+        if (activeStationOverlay != StationKind.LOCAL_MARKET) return false
+        val market = isolatedLocalMarkets[currentSectorId] ?: return false
+        val entry = market.resourceEntries[type to isRefined] ?: return false
+        if (entry.localStock <= 0 || credits < entry.buyPrice) return false
+
+        credits -= entry.buyPrice
+        entry.localStock -= 1
+        // Local scarcity gently nudges ONLY this city's buy price upward
+        entry.buyPrice = (entry.buyPrice * 1.02f).roundToInt().coerceAtLeast(entry.buyPrice + 1)
+
+        if (isRefined) {
+            refinedCargo[type] = (refinedCargo[type] ?: 0) + 1
+        } else {
+            rawCargo[type] = (rawCargo[type] ?: 0) + 1
+        }
+        requestSave()
+        return true
+    }
+
+    /**
+     * Sells resource cargo to the CURRENT sector's strictly isolated Local Market.
+     * Increases ONLY this city's local stock — never shared with any other city.
+     */
+    fun sellMarketResource(type: ResourceType, isRefined: Boolean, sellAll: Boolean): Boolean {
+        if (activeStationOverlay != StationKind.LOCAL_MARKET) return false
+        val market = isolatedLocalMarkets[currentSectorId] ?: return false
+        val entry = market.resourceEntries[type to isRefined] ?: return false
+        val cargoMap = if (isRefined) refinedCargo else rawCargo
+        val owned = cargoMap[type] ?: 0
+        if (owned <= 0) return false
+
+        val qty = if (sellAll) owned else 1
+        val payout = entry.sellPrice * qty
+        credits += payout
+        val remaining = owned - qty
+        if (remaining > 0) {
+            cargoMap[type] = remaining
+        } else {
+            cargoMap.remove(type)
+        }
+        entry.localStock += qty
+        requestSave()
+        return true
+    }
+
+    /**
+     * Buys a locally stocked equipment module from THIS sector's isolated Local Market.
+     */
+    fun buyMarketEquipment(itemId: EquipmentItemId): Boolean {
+        if (activeStationOverlay != StationKind.LOCAL_MARKET) return false
+        val market = isolatedLocalMarkets[currentSectorId] ?: return false
+        val entry = market.equipmentEntries.firstOrNull { it.itemId == itemId } ?: return false
+        if (entry.localStock <= 0 || credits < entry.buyPrice) return false
+
+        credits -= entry.buyPrice
+        entry.localStock -= 1
+        ownedItems.add(EquipmentItem(instanceId = nextItemInstanceId++, type = itemId))
+        requestSave()
+        return true
+    }
+
+    /**
+     * Crafts consumables, sector chips, or basic ship gear at a Capital City Crafting Station
+     * using refined resources (consumes lowest qualifying refined tier first).
+     */
+    fun craftRecipe(recipe: CraftingRecipeId): Boolean {
+        if (activeStationOverlay != StationKind.CRAFTING) return false
+        val qualifying = refinedCargo.entries
+            .filter { (res, qty) -> qty > 0 && res.tier >= recipe.minRefinedTier }
+            .sortedWith(compareBy<Map.Entry<ResourceType, Int>> { it.key.isYellowCrystal }.thenBy { it.key.tier })
+        val totalAvailable = qualifying.sumOf { it.value }
+        if (totalAvailable < recipe.refinedCost) return false
+
+        var remainingCost = recipe.refinedCost
+        for ((res, qty) in qualifying) {
+            if (remainingCost <= 0) break
+            val take = min(qty, remainingCost)
+            val left = qty - take
+            if (left > 0) refinedCargo[res] = left else refinedCargo.remove(res)
+            remainingCost -= take
+        }
+
+        val popupText = when (recipe) {
+            CraftingRecipeId.HULL_REPAIR_KIT -> {
+                player.hp = player.maxHp
+                player.shield = player.maxShield
+                "HULL & SHIELD 100%"
+            }
+            CraftingRecipeId.PLASMA_AMMO_PACK -> {
+                overchargedAmmo += 25
+                "+25 PLASMA AMMO"
+            }
+            else -> {
+                val eq = recipe.resultEquipment
+                if (eq != null) {
+                    ownedItems.add(EquipmentItem(instanceId = nextItemInstanceId++, type = eq))
+                    "+1 ${eq.displayName}"
+                } else {
+                    recipe.displayName
+                }
+            }
+        }
+        popups.add(
+            FloatingPopup(
+                x = player.x,
+                y = player.y - activeShipClass.hullRadius - 36f,
+                text = popupText,
+                life = 1.6f,
+                maxLife = 1.6f,
+                colorRgb = (recipe.accentHex and 0xFFFFFF).toInt(),
+                textSize = 14f
+            )
+        )
+        requestSave()
+        return true
+    }
+
+    private fun createIsolatedLocalMarkets(): MutableMap<String, IsolatedLocalMarket> {
+        fun buildMarket(
+            sectorId: String,
+            marketName: String,
+            isBlackMarket: Boolean,
+            preferredRefinedNativeCity: String,
+            priceBias: Float,
+            stockSeed: Int,
+            gearStock: List<Triple<EquipmentItemId, Int, Int>>
+        ): IsolatedLocalMarket {
+            val marketRng = Random(stockSeed)
+            val entries = linkedMapOf<Pair<ResourceType, Boolean>, MutableMarketResourceEntry>()
+            for (res in ResourceType.entries) {
+                val isForeignRefinedBonus = !isBlackMarket && res.nativeSectorId == preferredRefinedNativeCity
+                val isNucleusCrystalBonus = isBlackMarket && res.isYellowCrystal
+                val rawSellMult = when {
+                    isNucleusCrystalBonus -> 1.15f
+                    res.refinesInSectorId == sectorId -> 1.05f
+                    else -> 0.88f
+                } * priceBias
+                val refinedSellMult = when {
+                    isNucleusCrystalBonus -> 1.45f
+                    isForeignRefinedBonus -> 1.28f
+                    res.refinesInSectorId == sectorId -> 1.12f
+                    else -> 0.96f
+                } * priceBias
+
+                val rawSell = (res.rawBasePrice * rawSellMult).roundToInt().coerceAtLeast(15)
+                val rawBuy = (rawSell * 1.32f).roundToInt().coerceAtLeast(rawSell + 10)
+                val rawStock = when {
+                    isBlackMarket && res.isYellowCrystal -> 4 + marketRng.nextInt(4)
+                    res.nativeSectorId == sectorId -> 12 + marketRng.nextInt(10)
+                    else -> 3 + marketRng.nextInt(6)
+                }
+                entries[res to false] = MutableMarketResourceEntry(
+                    resourceType = res,
+                    isRefined = false,
+                    buyPrice = rawBuy,
+                    sellPrice = rawSell,
+                    localStock = rawStock
+                )
+
+                val refSell = (res.refinedBasePrice * refinedSellMult).roundToInt().coerceAtLeast(45)
+                val refBuy = (refSell * 1.35f).roundToInt().coerceAtLeast(refSell + 25)
+                val refStock = when {
+                    isBlackMarket && res.isYellowCrystal -> 2 + marketRng.nextInt(3)
+                    res.refinesInSectorId == sectorId -> 5 + marketRng.nextInt(5)
+                    else -> 1 + marketRng.nextInt(3)
+                }
+                entries[res to true] = MutableMarketResourceEntry(
+                    resourceType = res,
+                    isRefined = true,
+                    buyPrice = refBuy,
+                    sellPrice = refSell,
+                    localStock = refStock
+                )
+            }
+            val gear = gearStock.map { (id, price, stock) ->
+                MutableMarketEquipmentEntry(itemId = id, buyPrice = price, localStock = stock)
+            }.toMutableList()
+            return IsolatedLocalMarket(
+                sectorId = sectorId,
+                marketName = marketName,
+                isBlackMarket = isBlackMarket,
+                resourceEntries = entries,
+                equipmentEntries = gear
+            )
+        }
+
+        return linkedMapOf(
+            "C1" to buildMarket(
+                sectorId = "C1",
+                marketName = "C1 AETHER LOCAL MARKET",
+                isBlackMarket = false,
+                preferredRefinedNativeCity = "C3",
+                priceBias = 1.00f,
+                stockSeed = 1011,
+                gearStock = listOf(
+                    Triple(EquipmentItemId.SG_1, 225, 6),
+                    Triple(EquipmentItemId.LF_1, 210, 4)
+                )
+            ),
+            "C2" to buildMarket(
+                sectorId = "C2",
+                marketName = "C2 VERDANT LOCAL MARKET",
+                isBlackMarket = false,
+                preferredRefinedNativeCity = "C1",
+                priceBias = 1.04f,
+                stockSeed = 2022,
+                gearStock = listOf(
+                    Triple(EquipmentItemId.LF_1, 195, 5),
+                    Triple(EquipmentItemId.SG_1, 240, 5)
+                )
+            ),
+            "C3" to buildMarket(
+                sectorId = "C3",
+                marketName = "C3 SOLARIS LOCAL MARKET",
+                isBlackMarket = false,
+                preferredRefinedNativeCity = "C2",
+                priceBias = 1.02f,
+                stockSeed = 3033,
+                gearStock = listOf(
+                    Triple(EquipmentItemId.LF_1, 185, 7),
+                    Triple(EquipmentItemId.SG_1, 260, 4)
+                )
+            ),
+            "0-0" to buildMarket(
+                sectorId = "0-0",
+                marketName = "0-0 NUCLEUS BLACK MARKET",
+                isBlackMarket = true,
+                preferredRefinedNativeCity = "0-0",
+                priceBias = 1.18f,
+                stockSeed = 9000,
+                gearStock = listOf(
+                    Triple(EquipmentItemId.LF_2, 1150, 3),
+                    Triple(EquipmentItemId.SG_2, 1300, 3),
+                    Triple(EquipmentItemId.LF_1, 240, 4)
+                )
+            )
+        )
+    }
+
     fun openTacticalMap() {
-        if (!player.isAlive || isHangarOpen || isPaused) return
+        if (!player.isAlive || isHangarOpen || isPaused || activeStationOverlay != null) return
         isGalaxyMapOpen = false
         isTacticalMapOpen = true
     }
@@ -718,7 +1284,7 @@ class SpaceGameEngine(
     }
 
     fun openGalaxyMap() {
-        if (!player.isAlive || isHangarOpen || isPaused) return
+        if (!player.isAlive || isHangarOpen || isPaused || activeStationOverlay != null) return
         isTacticalMapOpen = false
         isGalaxyMapOpen = true
     }
@@ -1451,7 +2017,7 @@ class SpaceGameEngine(
     }
 
     fun step(rawDt: Float) {
-        if (isPaused || isHangarOpen) return
+        if (isPaused || isHangarOpen || activeStationOverlay != null) return
         val dt = rawDt.coerceIn(0.001f, 0.05f)
         elapsedTime += dt
 
@@ -1469,6 +2035,7 @@ class SpaceGameEngine(
             }
             handlePlayerAutoFire(dt)
             updateLootBoxes(dt)
+            updateResourceNodes(dt)
         }
 
         updateAliens(dt)
@@ -1536,6 +2103,17 @@ class SpaceGameEngine(
             isAlive = player.isAlive,
             isPaused = isPaused,
             isHangarOpen = isHangarOpen,
+            nearestStationKind = nearestStation()?.kind,
+            nearestStationName = nearestStation()?.name,
+            activeStationOverlay = activeStationOverlay,
+            activeLocalMarket = if (activeStationOverlay == StationKind.LOCAL_MARKET) {
+                isolatedLocalMarkets[currentSectorId]?.toSnapshot()
+            } else null,
+            rawCargo = rawCargo.filterValues { it > 0 }.toMap(),
+            refinedCargo = refinedCargo.filterValues { it > 0 }.toMap(),
+            overchargedAmmo = overchargedAmmo,
+            miningNodeName = resourceNodes.firstOrNull { it.id == activeMiningNodeId }?.resourceType?.displayName,
+            miningProgress = resourceNodes.firstOrNull { it.id == activeMiningNodeId }?.harvestProgress ?: 0f,
             equipment = EquipmentSnapshot(
                 activeConfig = activeConfig,
                 activeShipClass = activeShipClass,
@@ -1791,6 +2369,10 @@ class SpaceGameEngine(
 
         player.fireCooldown = GameConfig.PLAYER_FIRE_INTERVAL
         val fireAngle = atan2(dy, dx)
+        val useOvercharge = overchargedAmmo > 0
+        if (useOvercharge) {
+            overchargedAmmo = (overchargedAmmo - 1).coerceAtLeast(0)
+        }
         lasers.add(
             LaserBolt(
                 x = player.x + cos(fireAngle) * 16f,
@@ -1800,8 +2382,8 @@ class SpaceGameEngine(
                 angleRad = fireAngle,
                 fromPlayer = true,
                 targetAlienId = target.id,
-                damage = player.laserDamage,
-                colorHex = activeShipClass.accentColorHex,
+                damage = if (useOvercharge) player.laserDamage * 1.35f else player.laserDamage,
+                colorHex = if (useOvercharge) 0xFFFACC15 else activeShipClass.accentColorHex,
                 lifeRemaining = 0.72f
             )
         )
@@ -1874,6 +2456,63 @@ class SpaceGameEngine(
             spawnBonusBox()
         }
         if (collectedAny) {
+            requestSave()
+        }
+    }
+
+    private fun updateResourceNodes(dt: Float) {
+        if (resourceNodes.isEmpty()) {
+            activeMiningNodeId = null
+            return
+        }
+        val mineRange = 122f + (activeShipClass.hullRadius - 20f)
+        var closest: ResourceNodeEntity? = null
+        var closestDist = mineRange
+        for (node in resourceNodes) {
+            node.pulsePhase += dt * 3.1f
+            node.rotationRad += dt * (if (node.resourceType.isYellowCrystal) 0.42f else 0.22f)
+            val d = hypot(player.x - node.x, player.y - node.y)
+            if (d <= closestDist) {
+                closestDist = d
+                closest = node
+            }
+        }
+
+        var harvested = false
+        for (node in resourceNodes) {
+            if (node == closest) {
+                activeMiningNodeId = node.id
+                val harvestSpeed = if (node.resourceType.isYellowCrystal) 0.78f else 0.96f
+                node.harvestProgress = (node.harvestProgress + dt * harvestSpeed).coerceAtMost(1f)
+                if (node.harvestProgress >= 1f) {
+                    val res = node.resourceType
+                    rawCargo[res] = (rawCargo[res] ?: 0) + node.yieldAmount
+                    popups.add(
+                        FloatingPopup(
+                            x = node.x,
+                            y = node.y - node.radius - 12f,
+                            text = "+${node.yieldAmount} ${res.displayName} (Refine: ${res.refinesInSectorId})",
+                            life = 1.65f,
+                            maxLife = 1.65f,
+                            colorRgb = (res.colorHex and 0xFFFFFF).toInt(),
+                            textSize = 13.5f
+                        )
+                    )
+                    spawnHitSparks(node.x, node.y, colorHex = res.colorHex, count = 10)
+                    resourceNodes.remove(node)
+                    spawnResourceNodeForActiveSector()
+                    activeMiningNodeId = null
+                    harvested = true
+                    break
+                }
+            } else if (node.harvestProgress > 0f) {
+                node.harvestProgress = max(0f, node.harvestProgress - dt * 0.6f)
+            }
+        }
+        if (closest == null) {
+            activeMiningNodeId = null
+        }
+        if (harvested) {
             requestSave()
         }
     }
@@ -2130,6 +2769,9 @@ class SpaceGameEngine(
         hitY: Float,
         isRadiation: Boolean = false
     ) {
+        // Strict Safe Zone protection: zero damage in Capital Cities and inside Safe Zones
+        if (currentSector.isEntireSectorSafe) return
+        if (player.inSafeZone && !isRadiation) return
         player.timeSinceDamaged = 0f
         screenShake = max(screenShake, if (isRadiation) 2.5f else 4.5f)
 

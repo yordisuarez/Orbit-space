@@ -93,6 +93,17 @@ data class SectorNode(
     val isCapitalCity: Boolean get() = zoneType == GalaxyZoneType.CAPITAL_CITY
     val isNucleus: Boolean get() = zoneType == GalaxyZoneType.NUCLEUS
     val isShortcutHub: Boolean get() = shortcutSectorIds.isNotEmpty() && id.startsWith("R")
+    val hasCentralStations: Boolean get() = isCapitalCity || isNucleus
+
+    /** Native Capital City whose regional raw resources spawn in this sector (or "0-0" for Nucleus). */
+    val nativeCityId: String
+        get() = when {
+            id == "0-0" -> "0-0"
+            id == "C1" || id.startsWith("1-") || id.startsWith("R1-") -> "C1"
+            id == "C2" || id.startsWith("2-") || id.startsWith("R2-") -> "C2"
+            id == "C3" || id.startsWith("3-") || id.startsWith("R3-") -> "C3"
+            else -> "C1"
+        }
 
     fun isShortcutTo(neighborId: String): Boolean = neighborId in shortcutSectorIds
 
@@ -458,14 +469,14 @@ object GalaxyMapGraph {
             name = "Nucleus (Black Market)",
             position = Offset(0.50f, 0.51f),
             zoneType = GalaxyZoneType.NUCLEUS,
-            resourceTiers = "Tier 5 • Yellow Crystal • Black Market",
-            minTier = 5,
+            resourceTiers = "Tier 4–5 • Yellow Crystal • Black Market",
+            minTier = 4,
             maxTier = 5,
             connectedSectorIds = listOf("1-3", "2-3", "3-3"),
             hasCentralSafeZone = true,
             isLargeSector = true,
-            mapSize = 22000f,
-            safeZoneRadius = 950f,
+            mapSize = 28000f,
+            safeZoneRadius = 1150f,
             nodeColorHex = 0xFFFBBF24
         )
     )

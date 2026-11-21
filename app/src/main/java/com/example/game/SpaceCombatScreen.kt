@@ -12,15 +12,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -28,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -39,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
@@ -64,7 +73,12 @@ fun SpaceCombatScreen(
     val screenStage by viewModel.screenStage.collectAsStateWithLifecycle()
     val selectedCompany by viewModel.selectedOnboardingCompany.collectAsStateWithLifecycle()
     val pilotNameDraft by viewModel.pilotNameDraft.collectAsStateWithLifecycle()
+    val language by viewModel.language.collectAsStateWithLifecycle()
+    val isSettingsOpen by viewModel.isSettingsOpen.collectAsStateWithLifecycle()
     val engine = viewModel.engine
+
+    CompositionLocalProvider(LocalGameLanguage provides language) {
+        val strings = GameStrings.of(language)
 
     when (screenStage) {
         AppScreenStage.INTRO -> {
@@ -74,7 +88,7 @@ fun SpaceCombatScreen(
                 onContinueSaved = { viewModel.continueAsSavedPilot() },
                 onStartNew = { viewModel.beginOnboarding() }
             )
-            return
+            return@CompositionLocalProvider
         }
 
         AppScreenStage.ONBOARDING_COMPANY -> {
@@ -84,7 +98,7 @@ fun SpaceCombatScreen(
                 onNext = { viewModel.proceedToPilotNameStep() },
                 onBack = { viewModel.goBackToIntro() }
             )
-            return
+            return@CompositionLocalProvider
         }
 
         AppScreenStage.ONBOARDING_NAME -> {
@@ -95,7 +109,7 @@ fun SpaceCombatScreen(
                 onLaunchShip = { viewModel.completePilotRegistration() },
                 onBack = { viewModel.goBackToCompanySelection() }
             )
-            return
+            return@CompositionLocalProvider
         }
 
         AppScreenStage.GAMEPLAY -> Unit
@@ -121,6 +135,8 @@ fun SpaceCombatScreen(
 
     BackHandler(enabled = hud.isAlive) {
         when {
+            isSettingsOpen -> viewModel.closeSettings()
+            hud.activeStationOverlay != null -> viewModel.closeStation()
             hud.isGalaxyMapOpen -> viewModel.closeGalaxyMap()
             hud.isTacticalMapOpen -> viewModel.closeTacticalMap()
             hud.isHangarOpen -> viewModel.closeHangar()
@@ -166,6 +182,7 @@ fun SpaceCombatScreen(
                 hud = hud,
                 onOpenHangar = { viewModel.openHangar() },
                 onOpenGalaxyMap = { viewModel.toggleGalaxyMap() },
+                onOpenSettings = { viewModel.openSettings() },
                 onToggleConfig = { viewModel.toggleConfig() },
                 onSelectFormation = { viewModel.selectOwnedFormationFromHud(it) },
                 onCancelAutopilot = { viewModel.cancelAutopilot() },
@@ -182,7 +199,7 @@ fun SpaceCombatScreen(
             )
 
             VirtualJoystick(
-                label = stringResource(R.string.controls_hint_move),
+                label = strings.ctrlMove,
                 accentColor = CyanLaser,
                 tag = "left_movement_joystick",
                 onMove = { x, y -> viewModel.setMoveJoystick(x, y) },
@@ -194,6 +211,22 @@ fun SpaceCombatScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.align(Alignment.BottomEnd)
             ) {
+                val nearStationKind = hud.nearestStationKind
+                if (nearStationKind != null) {
+                    StationInteractButton(
+                        stationKind = nearStationKind,
+                        stationName = hud.nearestStationName
+                            ?: when (nearStationKind) {
+                                StationKind.REFINERY -> strings.ctrlRefineryShort
+                                StationKind.CRAFTING -> strings.ctrlCraftingShort
+                                StationKind.LOCAL_MARKET -> strings.ctrlMarketShort
+                            },
+                        isBlackMarket = hud.currentSectorId == "0-0",
+                        onInteract = { viewModel.openNearbyStation() },
+                        modifier = Modifier.padding(bottom = 14.dp)
+                    )
+                }
+
                 if (hud.isNearJumpGate) {
                     JumpGateButton(
                         gateLabel = hud.jumpGateLabel,
@@ -220,7 +253,7 @@ fun SpaceCombatScreen(
                 )
 
                 VirtualJoystick(
-                    label = stringResource(R.string.controls_hint_aim),
+                    label = strings.ctrlTarget,
                     accentColor = CrimsonDanger,
                     tag = "right_targeting_joystick",
                     onMove = { x, y -> viewModel.setAimJoystick(x, y) }
@@ -247,6 +280,18 @@ fun SpaceCombatScreen(
                 onEngageAutopilotToNextGate = { viewModel.engageAutopilotToNextRoutePortal() },
                 onSwitchToLocalMap = { viewModel.openTacticalMap() },
                 onClose = { viewModel.closeGalaxyMap() }
+            )
+        }
+
+        if (hud.activeStationOverlay != null && hud.isAlive && !hud.isHangarOpen && !hud.isPaused) {
+            StationOverlay(
+                hud = hud,
+                onRefineResource = { type, refineAll -> viewModel.refineResource(type, refineAll) },
+                onBuyMarketResource = { type, isRefined -> viewModel.buyMarketResource(type, isRefined) },
+                onSellMarketResource = { type, isRefined, sellAll -> viewModel.sellMarketResource(type, isRefined, sellAll) },
+                onBuyMarketEquipment = { itemId -> viewModel.buyMarketEquipment(itemId) },
+                onCraftRecipe = { recipe -> viewModel.craftRecipe(recipe) },
+                onClose = { viewModel.closeStation() }
             )
         }
 
@@ -279,28 +324,164 @@ fun SpaceCombatScreen(
             )
         }
 
-        if (hud.isPaused && !hud.isHangarOpen && hud.isAlive) {
+        if (hud.isPaused && !hud.isHangarOpen && hud.isAlive && !isSettingsOpen) {
             TacticalModalOverlay(
-                title = stringResource(R.string.paused_title),
-                subtitle = "${hud.activeShipClass.displayName} • ${stringResource(R.string.hud_credits_label)}: ${"%,d".format(hud.credits)} • ${stringResource(R.string.hud_kills_label)}: ${hud.kills}",
+                title = strings.pausedTitle,
+                subtitle = "${hud.activeShipClass.displayName} • ${strings.hudCredits}: ${"%,d".format(hud.credits)} • ${strings.hudKills}: ${hud.kills}",
                 accentColor = CyanLaser,
-                primaryLabel = stringResource(R.string.action_resume),
+                primaryLabel = strings.actionResume,
                 primaryTag = "resume_button",
                 onPrimaryClick = { viewModel.togglePause() },
-                secondaryLabel = stringResource(R.string.action_reset_save),
+                secondaryLabel = strings.actionResetSave,
                 secondaryTag = "reset_save_button",
                 onSecondaryClick = { viewModel.resetSave() }
             )
         }
 
+        if (isSettingsOpen) {
+            SettingsModalOverlay(
+                currentLanguage = language,
+                onSelectLanguage = { viewModel.setLanguage(it) },
+                onClose = { viewModel.closeSettings() }
+            )
+        }
+
         if (!hud.isAlive) {
             TacticalModalOverlay(
-                title = stringResource(R.string.ship_destroyed_title),
-                subtitle = "${stringResource(R.string.ship_destroyed_subtitle)}  •  ${"%,d".format(hud.credits)} CR",
+                title = strings.shipDestroyedTitle,
+                subtitle = "${strings.shipDestroyedSubtitle}  •  ${"%,d".format(hud.credits)} CR",
                 accentColor = CrimsonDanger,
-                primaryLabel = stringResource(R.string.action_relaunch),
+                primaryLabel = strings.actionRelaunch,
                 primaryTag = "relaunch_button",
                 onPrimaryClick = { viewModel.relaunchShip() }
+            )
+        }
+    }
+    }
+}
+
+@Composable
+private fun SettingsModalOverlay(
+    currentLanguage: GameLanguage,
+    onSelectLanguage: (GameLanguage) -> Unit,
+    onClose: () -> Unit
+) {
+    val strings = GameStrings.of(currentLanguage)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xC8040711))
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(16.dp)
+            .testTag("settings_modal")
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .widthIn(min = 300.dp, max = 440.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(SpaceDeepSurface)
+                .border(1.5.dp, CyanLaser.copy(alpha = 0.78f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 22.dp, vertical = 18.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = CyanLaser,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = strings.settingsTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = CyanLaser,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                OutlinedButton(
+                    onClick = onClose,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TacticalWhite),
+                    modifier = Modifier
+                        .height(36.dp)
+                        .testTag("settings_close_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(strings.actionClose, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Language,
+                    contentDescription = null,
+                    tint = AmberCredits,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = strings.settingsLanguageLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TacticalWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                for (lang in GameLanguage.entries) {
+                    val selected = lang == currentLanguage
+                    Button(
+                        onClick = { onSelectLanguage(lang) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selected) CyanLaser else Color(0xFF132238),
+                            contentColor = if (selected) SpaceVoid else TacticalWhite
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("language_option_${lang.code}")
+                    ) {
+                        if (selected) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                        }
+                        Text(
+                            text = lang.displayLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = strings.settingsLanguageHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = TacticalMuted
             )
         }
     }
