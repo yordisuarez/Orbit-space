@@ -120,7 +120,21 @@ extension CraftQualityExt on CraftQuality {
   int applyBonusInt(int baseValue) => (baseValue * statMultiplier).round();
 
   String get bonusLabel => '+${(bonusPct * 100).round()}%';
+  Color get badgeColor => accentColor;
 
+  String get shortTag {
+    switch (this) {
+      case CraftQuality.standard:
+        return 'STD';
+      case CraftQuality.reinforced:
+        return 'RNF';
+      case CraftQuality.excellent:
+        return 'EXC';
+      case CraftQuality.masterwork:
+        return 'MWK';
+    }
+  }
+  
   Color get accentColor {
     switch (this) {
       case CraftQuality.standard:
@@ -1268,6 +1282,17 @@ class SectorStation {
   final double worldY;
   final double interactRadius;
   final Color accentColor;
+    String get shortTag {
+    switch (kind) {
+      case StationKind.refinery:
+        return 'REF';
+      case StationKind.localMarket:
+        return 'MKT';
+      case StationKind.crafting:
+        return 'CRF';
+    }
+    }
+  
 }
 
 class MarketResourceListing {
