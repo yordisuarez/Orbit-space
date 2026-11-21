@@ -44,7 +44,8 @@ class GuideEntry {
 
 class GameStrings {
   const GameStrings._();
-
+  static GameStringsView of(GameLanguage lang) => GameStringsView(lang);
+  
   static const List<GuideEntry> guideEntries = <GuideEntry>[
     GuideEntry(
       id: 'capsule_death_loot',
@@ -597,6 +598,22 @@ class GameStrings {
           'Restores 100% Hull & Shield immediately on purchase',
           'Restaura 100% Casco y Escudo al instante al comprar',
         );
-    }
+            }
   }
+}
+
+class GameStringsView {
+  const GameStringsView(this.lang);
+  final GameLanguage lang;
+
+  String get sectorMapTitle =>
+      GameStrings.t(lang, 'SECTOR MAP', 'MAPA DE SECTOR');
+
+  String get tapToSteerHint => GameStrings.t(
+        lang,
+        'Tap map to autopilot',
+        'Toca el mapa para piloto automático',
+      );
+
+  String get closeLabel => GameStrings.actionClose(lang);
 }
