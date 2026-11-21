@@ -44,6 +44,13 @@ class GuideEntry {
 
 class GameStrings {
   const GameStrings._();
+    String get dockedSwapReady => 'DOCKED • READY';
+  String get dockRequiredShort => 'DOCK REQUIRED';
+  String get capsuleShipTitle => 'PILOT CAPSULE';
+  String get permanentBadge => 'PERMANENT';
+  String get pilotingLabel => 'PILOTING';
+  String get boardShipLabel => 'BOARD SHIP';
+
   static GameStringsView of(GameLanguage lang) => GameStringsView(lang);
   
   static const List<GuideEntry> guideEntries = <GuideEntry>[
