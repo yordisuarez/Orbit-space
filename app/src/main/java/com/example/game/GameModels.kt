@@ -23,9 +23,9 @@ object GameConfig {
     const val FLAX_VANT_COST = 600
     const val FORMATION_SWITCH_COOLDOWN_SEC = 3.0f
 
-    // Boss alien variant scaling (20% spawn chance per sector)
+    // Boss alien variant scaling (20% spawn chance per sector, +65% boosted BOSS HP)
     const val BOSS_SPAWN_CHANCE = 0.20f
-    const val BOSS_HP_MULTIPLIER = 4f
+    const val BOSS_HP_MULTIPLIER = 6.6f
     const val BOSS_DAMAGE_MULTIPLIER = 2f
     const val BOSS_REWARD_MULTIPLIER = 4
     const val BOSS_SIZE_MULTIPLIER = 1.5f
@@ -34,6 +34,7 @@ object GameConfig {
     const val AUTOPILOT_STOP_RADIUS = 60f
     const val AUTOPILOT_MAX_TARGET_RADIUS = 19800f
     const val HUD_MINIMAP_VIEW_RADIUS = 4500f
+    const val ALIEN_RADAR_DETECTION_RANGE = 2800f
 
     // Jump Gate Portal & Classic Square Map (MAP X-1)
     const val MAIN_JUMP_GATE_X = 220f

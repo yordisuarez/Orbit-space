@@ -402,8 +402,39 @@ class _TacticalMapPainter extends CustomPainter {
       );
     }
 
-    // Aliens (normal & pulsing BOSS)
+    final double clampedPx = isMapX1
+        ? game.player.position.x.clamp(0.0, GameConstants.mapX1Size)
+        : game.player.position.x;
+    final double clampedPy = isMapX1
+        ? game.player.position.y.clamp(0.0, GameConstants.mapX1Size)
+        : game.player.position.y;
+    final Offset playerPos = worldToCanvas(clampedPx, clampedPy);
+
+    // Faint translucent cyan 2,800-unit active ship sensor scanner range circle
+    final double scannerRadius = GameConstants.alienRadarDetectionRange * scale;
+    canvas.drawCircle(
+      playerPos,
+      scannerRadius,
+      Paint()..color = const Color(0x1200E5FF),
+    );
+    canvas.drawCircle(
+      playerPos,
+      scannerRadius,
+      Paint()
+        ..color = const Color(0x5700E5FF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.35,
+    );
+
+    // Aliens (normal & pulsing BOSS) — ONLY rendered within 2,800-unit ship sensor range
+    const double alienDetectSq =
+        GameConstants.alienRadarDetectionRange *
+        GameConstants.alienRadarDetectionRange;
     for (final AlienShipComponent alien in game.aliens) {
+      final double adx = alien.position.x - game.player.position.x;
+      final double ady = alien.position.y - game.player.position.y;
+      if (adx * adx + ady * ady > alienDetectSq) continue;
+
       final Offset pos = worldToCanvas(alien.position.x, alien.position.y);
       if (game.lockedTarget == alien) {
         canvas.drawCircle(
@@ -432,14 +463,6 @@ class _TacticalMapPainter extends CustomPainter {
         );
       }
     }
-
-    final double clampedPx = isMapX1
-        ? game.player.position.x.clamp(0.0, GameConstants.mapX1Size)
-        : game.player.position.x;
-    final double clampedPy = isMapX1
-        ? game.player.position.y.clamp(0.0, GameConstants.mapX1Size)
-        : game.player.position.y;
-    final Offset playerPos = worldToCanvas(clampedPx, clampedPy);
 
     // Active Autopilot Dashed Trajectory & Crosshair
     final Vector2? ap = game.autopilotTarget;

@@ -13,9 +13,31 @@ import 'game_models.dart';
 export 'game_models.dart';
 
 class DarkOrbitGame extends FlameGame with TapCallbacks {
+  DarkOrbitGame({
+    this.pilotName,
+    this.pilotCompany,
+    this.onResetToIntro,
+  });
+
   static const String hangarOverlayId = 'hangar';
   static const String tacticalMapOverlayId = 'tactical_map';
-  static const String _savePrefsKey = 'dark_orbit_mobile_save_v2';
+  static const String savePrefsKey = 'dark_orbit_mobile_save_v2';
+  static const String pilotNamePrefsKey = 'pilotName';
+  static const String companyIdPrefsKey = 'companyId';
+
+  String? pilotName;
+  PilotCompany? pilotCompany;
+  final VoidCallback? onResetToIntro;
+
+  PilotCompanySpec? get pilotCompanySpec =>
+      pilotCompany != null ? PilotCompanyCatalog.of(pilotCompany!) : null;
+
+  String? get formattedPilotCallsign {
+    final String? name = pilotName?.trim();
+    if (name == null || name.isEmpty) return null;
+    final PilotCompanySpec? spec = pilotCompanySpec;
+    return spec != null ? '[${spec.tag}] $name' : name;
+  }
 
   final Random rng = Random();
 
@@ -28,6 +50,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   late JumpButtonComponent jumpButton;
   late ConfigButtonComponent configButton;
   late FormationButtonComponent formationButton;
+  late FormationSubmenuComponent formationSubmenu;
   late HangarButtonComponent hangarButton;
   late AutopilotBadgeComponent autopilotBadge;
   late MissionHudComponent missionHud;
@@ -48,6 +71,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   };
   DroneFormation activeFormation = DroneFormation.normal;
   double formationSwitchCooldown = 0.0;
+  bool isFormationMenuOpen = false;
 
   // Tap-to-Fly Autopilot Waypoint
   Vector2? autopilotTarget;
@@ -363,6 +387,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     jumpButton = JumpButtonComponent();
     configButton = ConfigButtonComponent();
     formationButton = FormationButtonComponent();
+    formationSubmenu = FormationSubmenuComponent();
     hangarButton = HangarButtonComponent();
     autopilotBadge = AutopilotBadgeComponent();
     missionHud = MissionHudComponent();
@@ -383,6 +408,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       missionHud,
       minimap,
       tacticalHud,
+      formationSubmenu,
       warpFlashOverlay,
     ]);
   }
@@ -485,8 +511,19 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
                       .toList(),
                 })
             .toList(),
+        'pilotName': pilotName,
+        'companyId': pilotCompanySpec?.id,
       };
-      await prefs.setString(_savePrefsKey, jsonEncode(payload));
+      await prefs.setString(savePrefsKey, jsonEncode(payload));
+      if (pilotName != null &&
+          pilotName!.trim().length >= 3 &&
+          pilotCompanySpec != null) {
+        await prefs.setString(pilotNamePrefsKey, pilotName!.trim());
+        await prefs.setString(companyIdPrefsKey, pilotCompanySpec!.id);
+      } else {
+        await prefs.remove(pilotNamePrefsKey);
+        await prefs.remove(companyIdPrefsKey);
+      }
     } catch (_) {
       // Safe fallback if SharedPreferences is unavailable in test host
     }
@@ -495,10 +532,36 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   Future<void> _loadSavedGame() async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
-      final String? raw = prefs.getString(_savePrefsKey);
-      if (raw == null || raw.isEmpty) return;
+      final String? savedNamePref = prefs.getString(pilotNamePrefsKey)?.trim();
+      final PilotCompany? savedCompanyPref =
+          PilotCompanyCatalog.fromId(prefs.getString(companyIdPrefsKey));
+      if (pilotName == null &&
+          savedNamePref != null &&
+          savedNamePref.length >= 3 &&
+          savedNamePref.length <= 14) {
+        pilotName = savedNamePref;
+      }
+      pilotCompany ??= savedCompanyPref;
+
+      final String? raw = prefs.getString(savePrefsKey);
+      if (raw == null || raw.isEmpty) {
+        if (pilotName != null && pilotCompany != null) {
+          await saveGame();
+        }
+        return;
+      }
 
       final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      final String? jsonName = (data['pilotName'] as String?)?.trim();
+      final PilotCompany? jsonCompany =
+          PilotCompanyCatalog.fromId(data['companyId'] as String?);
+      if (pilotName == null &&
+          jsonName != null &&
+          jsonName.length >= 3 &&
+          jsonName.length <= 14) {
+        pilotName = jsonName;
+      }
+      pilotCompany ??= jsonCompany;
       final List<dynamic> rawItems =
           (data['ownedItems'] as List<dynamic>?) ?? <dynamic>[];
       final List<EquipmentItem> parsedItems = <EquipmentItem>[];
@@ -731,10 +794,14 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   Future<void> resetSave() async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_savePrefsKey);
+      await prefs.remove(savePrefsKey);
+      await prefs.remove(pilotNamePrefsKey);
+      await prefs.remove(companyIdPrefsKey);
     } catch (_) {
       // Ignore if SharedPreferences unavailable
     }
+    pilotName = null;
+    pilotCompany = null;
     _initStarterState();
     activeMap = GameMap.mainMap;
     warpFlashTimer = 0.0;
@@ -747,11 +814,15 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     lockedTarget = null;
     autopilotTarget = null;
     formationSwitchCooldown = 0.0;
+    isFormationMenuOpen = false;
     _clearActiveMapEntities();
     _populateActiveMapEntities();
     _snapVantsToFormation();
     camera.follow(player, snap: true);
-    await saveGame();
+    overlays.remove(hangarOverlayId);
+    overlays.remove(tacticalMapOverlayId);
+    resumeEngine();
+    onResetToIntro?.call();
   }
 
   void _clearActiveMapEntities() {
@@ -873,6 +944,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   }
 
   void openHangar() {
+    isFormationMenuOpen = false;
     overlays.remove(tacticalMapOverlayId);
     pauseEngine();
     overlays.add(hangarOverlayId);
@@ -887,6 +959,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   void openTacticalMap() {
     if (overlays.isActive(hangarOverlayId)) return;
+    isFormationMenuOpen = false;
     overlays.add(tacticalMapOverlayId);
   }
 
@@ -962,6 +1035,23 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     return true;
   }
 
+  bool selectOwnedFormationFromHud(DroneFormation formation) {
+    if (!ownedFormations.contains(formation)) return false;
+    if (activeFormation == formation) return false;
+    if (formationSwitchCooldown > 0.05) return false;
+    activeFormation = formation;
+    formationSwitchCooldown = GameConstants.formationSwitchCooldownSec;
+    _syncPlayerVitalsToStats();
+    spawnFloatingText(
+      position: player.position + Vector2(0.0, -46.0),
+      text: '${DroneFormationCatalog.of(formation).displayName} FORMATION',
+      color: DroneFormationCatalog.of(formation).accentColor,
+      fontSize: 13.5,
+    );
+    saveGame();
+    return true;
+  }
+
   bool cycleOwnedFormation() {
     if (formationSwitchCooldown > 0.0) return false;
     final List<DroneFormation> ordered = DroneFormation.values
@@ -970,17 +1060,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     if (ordered.length <= 1) return false;
     final int curIdx = ordered.indexOf(activeFormation);
     final DroneFormation next = ordered[(curIdx + 1) % ordered.length];
-    activeFormation = next;
-    formationSwitchCooldown = GameConstants.formationSwitchCooldownSec;
-    _syncPlayerVitalsToStats();
-    spawnFloatingText(
-      position: player.position + Vector2(0.0, -46.0),
-      text: '${DroneFormationCatalog.of(next).displayName} FORMATION',
-      color: DroneFormationCatalog.of(next).accentColor,
-      fontSize: 13.5,
-    );
-    saveGame();
-    return true;
+    return selectOwnedFormationFromHud(next);
   }
 
   void _snapVantsToFormation() {
@@ -1953,6 +2033,10 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   @override
   void onTapDown(TapDownEvent event) {
     super.onTapDown(event);
+    if (isFormationMenuOpen) {
+      isFormationMenuOpen = false;
+      return;
+    }
     final Vector2 worldPos = camera.globalToLocal(event.canvasPosition);
     AlienShipComponent? tapped;
     double bestDist = 74.0;
@@ -2959,6 +3043,37 @@ class PlayerShipComponent extends PositionComponent
       hp / max(1.0, gameRef.currentMaxHull),
       const Color(0xFF22C55E),
     );
+    final String? callsign = gameRef.formattedPilotCallsign;
+    if (callsign != null && callsign.isNotEmpty) {
+      final Color tagColor =
+          gameRef.pilotCompanySpec?.primaryColor ?? const Color(0xFF00E5FF);
+      final TextPaint callsignPaint = TextPaint(
+        style: TextStyle(
+          color: tagColor,
+          fontSize: 12.0,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.4,
+          shadows: const <Shadow>[
+            Shadow(
+              color: Color(0xEE030612),
+              offset: Offset(1.0, 1.0),
+              blurRadius: 2.5,
+            ),
+            Shadow(
+              color: Color(0xCC030612),
+              offset: Offset(-1.0, -1.0),
+              blurRadius: 2.0,
+            ),
+          ],
+        ),
+      );
+      callsignPaint.render(
+        canvas,
+        callsign,
+        Vector2(0.0, hullR + 10.0),
+        anchor: Anchor.topCenter,
+      );
+    }
     canvas.restore();
   }
 
@@ -3243,277 +3358,439 @@ class PlayerShipComponent extends PositionComponent
     double time,
     double flash,
   ) {
-    // 3 rear thrusters (Goliath heavy triple-engine array)
+    final double glowPulse = 0.72 + 0.28 * sin(time * 6.4);
+
+    // 1. Existing 3 Rear Thrusters (dynamic plasma flames)
     _drawPlasmaThrusterFlame(
       canvas,
-      Offset(cx - 19.5, cy - 10.2),
+      Offset(cx - 19.0, cy - 9.2),
       thrust: thrust,
-      maxLen: 21.0,
-      halfW: 3.8,
+      maxLen: 20.0,
+      halfW: 3.5,
       pulse: pulse,
-      phaseOffset: 0.6,
+      phaseOffset: 0.7,
     );
     _drawPlasmaThrusterFlame(
       canvas,
-      Offset(cx - 21.5, cy),
+      Offset(cx - 21.8, cy),
       thrust: thrust,
-      maxLen: 26.0,
-      halfW: 4.9,
+      maxLen: 27.0,
+      halfW: 4.6,
       pulse: pulse,
       phaseOffset: 0.0,
     );
     _drawPlasmaThrusterFlame(
       canvas,
-      Offset(cx - 19.5, cy + 10.2),
+      Offset(cx - 19.0, cy + 9.2),
       thrust: thrust,
-      maxLen: 21.0,
-      halfW: 3.8,
+      maxLen: 20.0,
+      halfW: 3.5,
       pulse: pulse,
-      phaseOffset: 2.4,
+      phaseOffset: 2.3,
     );
 
-    // Armored engine nozzle pods
-    for (final double ny in <double>[cy - 10.2, cy, cy + 10.2]) {
-      final double nw = ny == cy ? 3.8 : 2.8;
-      final double nx = ny == cy ? cx - 21.8 : cx - 19.8;
-      final Rect pod = Rect.fromLTWH(nx, ny - nw, 5.5, nw * 2.0);
-      canvas.drawRect(pod, Paint()..color = const Color(0xFF1E293B));
-      canvas.drawRect(
-        pod,
-        Paint()
-          ..color = const Color(0xFF64748B)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.95,
-      );
-    }
-
-    // Visible dual wing-mounted heavy laser barrels
-    for (final double sign in const <double>[-1.0, 1.0]) {
-      final double by = cy + sign * 16.5;
-      canvas.drawLine(
-        Offset(cx + 2.0, by),
-        Offset(cx + 22.5, by),
-        Paint()
-          ..color = const Color(0xFF334155)
-          ..strokeWidth = 3.8,
-      );
-      canvas.drawLine(
-        Offset(cx + 3.0, by - sign * 0.7),
-        Offset(cx + 21.5, by - sign * 0.7),
-        Paint()
-          ..color = const Color(0xFF94A3B8)
-          ..strokeWidth = 1.2
-          ..strokeCap = StrokeCap.round,
-      );
-      canvas.drawCircle(
-        Offset(cx + 22.8, by),
-        3.2,
-        Paint()..color = const Color(0x7300E5FF),
-      );
-      canvas.drawCircle(
-        Offset(cx + 22.8, by),
-        1.6,
-        Paint()..color = const Color(0xFF7DD3FC),
-      );
-      canvas.drawLine(
-        Offset(cx + 11.0, cy + sign * 10.5),
-        Offset(cx + 21.0, cy + sign * 10.5),
-        Paint()
-          ..color = const Color(0xFF475569)
-          ..strokeWidth = 2.4
-          ..strokeCap = StrokeCap.round,
-      );
-    }
-
-    // Wide aggressive muscular chassis with broad forward-angled armored wings
-    final Path cruiserHull = Path()
-      ..moveTo(cx + 27.5, cy - 4.2)
-      ..lineTo(cx + 16.5, cy - 9.5)
-      ..lineTo(cx + 12.0, cy - 22.5)
-      ..lineTo(cx + 2.0, cy - 25.5)
-      ..lineTo(cx - 12.5, cy - 21.5)
-      ..lineTo(cx - 19.5, cy - 14.5)
-      ..lineTo(cx - 17.5, cy - 6.2)
-      ..lineTo(cx - 21.0, cy - 3.5)
-      ..lineTo(cx - 21.0, cy + 3.5)
-      ..lineTo(cx - 17.5, cy + 6.2)
-      ..lineTo(cx - 19.5, cy + 14.5)
-      ..lineTo(cx - 12.5, cy + 21.5)
-      ..lineTo(cx + 2.0, cy + 25.5)
-      ..lineTo(cx + 12.0, cy + 22.5)
-      ..lineTo(cx + 16.5, cy + 9.5)
-      ..lineTo(cx + 27.5, cy + 4.2)
-      ..lineTo(cx + 20.5, cy)
-      ..close();
-    canvas.drawPath(
-      cruiserHull,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(cx, cy - 26.0),
-          Offset(cx, cy + 26.0),
-          const <Color>[
-            Color(0xFF1E3A5F),
-            Color(0xFF475569),
-            Color(0xFF64748B),
-            Color(0xFF1E293B),
-          ],
-          const <double>[0.0, 0.35, 0.65, 1.0],
-        ),
-    );
-    canvas.drawPath(
-      cruiserHull,
-      Paint()
-        ..color = const Color(0xC793C5FD)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
-
-    // Broad forward-angled steel-blue shoulder armor plates
-    for (final double sign in const <double>[-1.0, 1.0]) {
-      final Path wingArmor = Path()
-        ..moveTo(cx + 10.5, cy + sign * 20.5)
-        ..lineTo(cx + 2.0, cy + sign * 23.0)
-        ..lineTo(cx - 11.0, cy + sign * 19.0)
-        ..lineTo(cx - 14.0, cy + sign * 11.0)
-        ..lineTo(cx + 5.0, cy + sign * 10.0)
+    // 3 Rear Armored Thruster Bells
+    final List<List<double>> nozzles = <List<double>>[
+      <double>[cx - 19.0, cy - 9.2, 2.8],
+      <double>[cx - 21.8, cy, 3.7],
+      <double>[cx - 19.0, cy + 9.2, 2.8],
+    ];
+    for (final List<double> n in nozzles) {
+      final double nx = n[0];
+      final double ny = n[1];
+      final double halfH = n[2];
+      final Path bell = Path()
+        ..moveTo(nx + 5.6, ny - halfH * 1.18)
+        ..lineTo(nx, ny - halfH * 0.86)
+        ..lineTo(nx, ny + halfH * 0.86)
+        ..lineTo(nx + 5.6, ny + halfH * 1.18)
         ..close();
       canvas.drawPath(
-        wingArmor,
+        bell,
         Paint()
           ..shader = ui.Gradient.linear(
-            Offset(cx + 10.0, cy + sign * 10.0),
-            Offset(cx - 14.0, cy + sign * 23.0),
+            Offset(nx, ny - halfH * 1.2),
+            Offset(nx, ny + halfH * 1.2),
             const <Color>[
-              Color(0xFF1D4ED8),
-              Color(0xFF3B82F6),
-              Color(0xFF1E3A8A),
+              Color(0xFF475569),
+              Color(0xFF1E293B),
+              Color(0xFF0F172A),
             ],
-            const <double>[0.0, 0.45, 1.0],
+            const <double>[0.0, 0.5, 1.0],
           ),
       );
       canvas.drawPath(
-        wingArmor,
+        bell,
         Paint()
-          ..color = const Color(0xFF0F172A)
+          ..color = const Color(0xBF94A3B8)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.15,
+          ..strokeWidth = 0.9,
       );
       canvas.drawLine(
-        Offset(cx + 9.5, cy + sign * 20.0),
-        Offset(cx + 2.0, cy + sign * 22.3),
+        Offset(nx + 0.6, ny - halfH * 0.66),
+        Offset(nx + 0.6, ny + halfH * 0.66),
         Paint()
-          ..color = const Color(0xD993C5FD)
+          ..color = const Color(0xFF38BDF8).withOpacity(0.65 + 0.35 * thrust)
           ..strokeWidth = 1.4
           ..strokeCap = StrokeCap.round,
       );
     }
 
-    // Layered central gunmetal carapace deck
-    final Path dorsalCarapace = Path()
-      ..moveTo(cx + 22.0, cy - 2.6)
-      ..lineTo(cx + 12.0, cy - 8.8)
-      ..lineTo(cx - 12.5, cy - 10.2)
-      ..lineTo(cx - 17.5, cy - 4.8)
-      ..lineTo(cx - 17.5, cy + 4.8)
-      ..lineTo(cx - 12.5, cy + 10.2)
-      ..lineTo(cx + 12.0, cy + 8.8)
-      ..lineTo(cx + 22.0, cy + 2.6)
-      ..lineTo(cx + 17.5, cy)
+    // 2. Classic Goliath Top-Down Hull Silhouette:
+    // Recessed beveled central nose + open forward notches + forward-curved pincer wings + broad rear armored shoulders
+    final Path goliathHull = Path()
+      ..moveTo(cx + 18.2, cy - 3.8)
+      ..lineTo(cx + 19.6, cy - 1.9)
+      ..lineTo(cx + 19.6, cy + 1.9)
+      ..lineTo(cx + 18.2, cy + 3.8)
+      ..lineTo(cx + 12.2, cy + 7.8)
+      ..lineTo(cx + 7.4, cy + 10.4)
+      ..cubicTo(
+        cx + 13.8, cy + 11.0,
+        cx + 22.8, cy + 12.6,
+        cx + 30.4, cy + 14.2,
+      )
+      ..cubicTo(
+        cx + 26.2, cy + 22.4,
+        cx + 12.5, cy + 28.6,
+        cx - 3.6, cy + 26.8,
+      )
+      ..cubicTo(
+        cx - 12.8, cy + 25.8,
+        cx - 18.6, cy + 20.6,
+        cx - 19.2, cy + 13.6,
+      )
+      ..lineTo(cx - 16.4, cy + 11.4)
+      ..lineTo(cx - 16.4, cy + 6.4)
+      ..lineTo(cx - 20.2, cy + 4.2)
+      ..lineTo(cx - 20.2, cy - 4.2)
+      ..lineTo(cx - 16.4, cy - 6.4)
+      ..lineTo(cx - 16.4, cy - 11.4)
+      ..lineTo(cx - 19.2, cy - 13.6)
+      ..cubicTo(
+        cx - 18.6, cy - 20.6,
+        cx - 12.8, cy - 25.8,
+        cx - 3.6, cy - 26.8,
+      )
+      ..cubicTo(
+        cx + 12.5, cy - 28.6,
+        cx + 26.2, cy - 22.4,
+        cx + 30.4, cy - 14.2,
+      )
+      ..cubicTo(
+        cx + 22.8, cy - 12.6,
+        cx + 13.8, cy - 11.0,
+        cx + 7.4, cy - 10.4,
+      )
+      ..lineTo(cx + 12.2, cy - 7.8)
       ..close();
+
     canvas.drawPath(
-      dorsalCarapace,
+      goliathHull,
       Paint()
         ..shader = ui.Gradient.linear(
-          Offset(cx + 12.0, cy - 11.0),
-          Offset(cx - 12.0, cy + 11.0),
+          Offset(cx + 4.0, cy - 28.0),
+          Offset(cx - 6.0, cy + 28.0),
           const <Color>[
-            Color(0xFF94A3B8),
-            Color(0xFFCBD5E1),
-            Color(0xFF475569),
             Color(0xFF1E293B),
+            Color(0xFF475569),
+            Color(0xFF64748B),
+            Color(0xFF334155),
+            Color(0xFF0F172A),
           ],
-          const <double>[0.0, 0.34, 0.68, 1.0],
+          const <double>[0.0, 0.24, 0.5, 0.76, 1.0],
         ),
     );
     canvas.drawPath(
-      dorsalCarapace,
+      goliathHull,
       Paint()
-        ..color = const Color(0xFF0F172A)
+        ..color = const Color(0xC7CBD5E1)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.25,
+        ..strokeWidth = 1.35
+        ..strokeJoin = StrokeJoin.round,
     );
 
-    // Panel seam lines
-    final Paint seamPaint = Paint()
-      ..color = const Color(0xFF0F172A)
-      ..strokeWidth = 1.1;
+    // 3. Layered Armored Pincer Wing Plates, Broad Rear Shoulders, Panel Seams & Warm Orange/Amber Tactical Stripes
     for (final double sign in const <double>[-1.0, 1.0]) {
+      final Path rearShoulder = Path()
+        ..moveTo(cx - 2.0, cy + sign * 24.4)
+        ..cubicTo(
+          cx - 10.4, cy + sign * 23.6,
+          cx - 15.8, cy + sign * 19.2,
+          cx - 16.6, cy + sign * 13.0,
+        )
+        ..lineTo(cx - 11.0, cy + sign * 9.8)
+        ..lineTo(cx - 1.5, cy + sign * 11.2)
+        ..lineTo(cx + 1.8, cy + sign * 18.8)
+        ..close();
+      canvas.drawPath(
+        rearShoulder,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx - 1.0, cy + sign * 24.0),
+            Offset(cx - 16.0, cy + sign * 10.0),
+            const <Color>[
+              Color(0xFF475569),
+              Color(0xFF334155),
+              Color(0xFF1E293B),
+            ],
+            const <double>[0.0, 0.5, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        rearShoulder,
+        Paint()
+          ..color = const Color(0xFF0F172A)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.05,
+      );
+
+      final Path pincerPlate = Path()
+        ..moveTo(cx + 27.6, cy + sign * 15.1)
+        ..cubicTo(
+          cx + 23.4, cy + sign * 20.8,
+          cx + 12.2, cy + sign * 25.4,
+          cx + 0.2, cy + sign * 23.8,
+        )
+        ..lineTo(cx + 3.4, cy + sign * 15.8)
+        ..cubicTo(
+          cx + 10.2, cy + sign * 13.8,
+          cx + 18.8, cy + sign * 13.8,
+          cx + 27.6, cy + sign * 15.1,
+        )
+        ..close();
+      canvas.drawPath(
+        pincerPlate,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx + 26.0, cy + sign * 15.0),
+            Offset(cx + 1.0, cy + sign * 24.0),
+            const <Color>[
+              Color(0xFF94A3B8),
+              Color(0xFF475569),
+              Color(0xFF1E293B),
+            ],
+            const <double>[0.0, 0.48, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        pincerPlate,
+        Paint()
+          ..color = const Color(0xFF0F172A)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.05,
+      );
+
+      // Subtle warm orange/amber tactical accent stripe along pincer blade
+      final Path amberStripe = Path()
+        ..moveTo(cx + 21.8, cy + sign * 17.5)
+        ..cubicTo(
+          cx + 16.5, cy + sign * 21.4,
+          cx + 9.2, cy + sign * 23.2,
+          cx + 2.8, cy + sign * 22.5,
+        )
+        ..lineTo(cx + 4.1, cy + sign * 19.6)
+        ..cubicTo(
+          cx + 9.6, cy + sign * 20.1,
+          cx + 15.6, cy + sign * 18.7,
+          cx + 20.2, cy + sign * 15.8,
+        )
+        ..close();
+      canvas.drawPath(
+        amberStripe,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx + 21.0, cy + sign * 16.0),
+            Offset(cx + 3.0, cy + sign * 22.0),
+            const <Color>[
+              Color(0xFFF59E0B),
+              Color(0xFFEA580C),
+              Color(0xFFFBBF24),
+            ],
+            const <double>[0.0, 0.55, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        amberStripe,
+        Paint()
+          ..color = const Color(0xB80F172A)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.75,
+      );
+
+      // Rear shoulder warm amber tactical hash
       canvas.drawLine(
-        Offset(cx + 2.0, cy + sign * 8.6),
-        Offset(cx - 2.0, cy + sign * 2.5),
-        seamPaint,
+        Offset(cx - 5.2, cy + sign * 21.8),
+        Offset(cx - 11.4, cy + sign * 18.4),
+        Paint()
+          ..color = const Color(0xE6F59E0B)
+          ..strokeWidth = 2.0
+          ..strokeCap = StrokeCap.round,
+      );
+
+      // Brushed-steel highlight along outer pincer blade leading edge
+      final Path outerBladeTrim = Path()
+        ..moveTo(cx + 29.2, cy + sign * 14.8)
+        ..cubicTo(
+          cx + 24.8, cy + sign * 21.8,
+          cx + 13.4, cy + sign * 26.8,
+          cx + 1.0, cy + sign * 26.0,
+        );
+      canvas.drawPath(
+        outerBladeTrim,
+        Paint()
+          ..color = const Color(0xCCE2E8F0)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.25
+          ..strokeCap = StrokeCap.round,
+      );
+
+      // Recessed inner-notch weapon emitter ports
+      canvas.drawLine(
+        Offset(cx + 11.2, cy + sign * 12.0),
+        Offset(cx + 20.2, cy + sign * 13.0),
+        Paint()
+          ..color = const Color(0xFF334155)
+          ..strokeWidth = 2.1,
+      );
+      canvas.drawCircle(
+        Offset(cx + 20.6, cy + sign * 13.0),
+        1.8,
+        Paint()..color = const Color(0xFF38BDF8).withOpacity(0.55 * glowPulse),
+      );
+
+      // Armor panel seam lines
+      canvas.drawLine(
+        Offset(cx + 12.6, cy + sign * 23.6),
+        Offset(cx + 9.6, cy + sign * 14.4),
+        Paint()
+          ..color = const Color(0xD90F172A)
+          ..strokeWidth = 1.0,
       );
       canvas.drawLine(
-        Offset(cx - 11.0, cy + sign * 9.5),
-        Offset(cx - 11.0, cy + sign * 3.5),
-        seamPaint,
+        Offset(cx - 5.8, cy + sign * 23.4),
+        Offset(cx - 7.8, cy + sign * 11.2),
+        Paint()
+          ..color = const Color(0xD10F172A)
+          ..strokeWidth = 1.0,
       );
     }
 
-    // Glowing central reactor core
-    final double reactorPulse = 0.78 + 0.22 * sin(time * 7.5);
-    final Offset reactorCenter = Offset(cx - 5.5, cy);
-    canvas.drawCircle(reactorCenter, 6.2, Paint()..color = const Color(0xFF0F172A));
-    canvas.drawCircle(
-      reactorCenter,
-      6.2,
+    // 4. Thick Muscular Central Fuselage Spine with Recessed Beveled Armored Nose
+    final Path centralFuselage = Path()
+      ..moveTo(cx + 17.8, cy - 3.4)
+      ..lineTo(cx + 19.0, cy - 1.6)
+      ..lineTo(cx + 19.0, cy + 1.6)
+      ..lineTo(cx + 17.8, cy + 3.4)
+      ..lineTo(cx + 10.6, cy + 8.0)
+      ..lineTo(cx - 4.0, cy + 9.4)
+      ..lineTo(cx - 14.8, cy + 7.4)
+      ..lineTo(cx - 18.2, cy + 3.4)
+      ..lineTo(cx - 18.2, cy - 3.4)
+      ..lineTo(cx - 14.8, cy - 7.4)
+      ..lineTo(cx - 4.0, cy - 9.4)
+      ..lineTo(cx + 10.6, cy - 8.0)
+      ..close();
+    canvas.drawPath(
+      centralFuselage,
       Paint()
-        ..color = const Color(0xFF64748B)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
-    );
-    canvas.drawCircle(
-      reactorCenter,
-      8.5,
-      Paint()..color = const Color(0xFF00E5FF).withOpacity(0.35 * reactorPulse),
-    );
-    canvas.drawCircle(
-      reactorCenter,
-      4.6,
-      Paint()
-        ..shader = ui.Gradient.radial(
-          reactorCenter,
-          4.6,
+        ..shader = ui.Gradient.linear(
+          Offset(cx + 6.0, cy - 9.5),
+          Offset(cx - 6.0, cy + 9.5),
           const <Color>[
-            Colors.white,
-            Color(0xFF38BDF8),
-            Color(0xFF0284C7),
+            Color(0xFF94A3B8),
+            Color(0xFFCBD5E1),
+            Color(0xFF64748B),
+            Color(0xFF334155),
+            Color(0xFF1E293B),
           ],
-          const <double>[0.0, 0.55, 1.0],
+          const <double>[0.0, 0.25, 0.55, 0.8, 1.0],
         ),
     );
+    canvas.drawPath(
+      centralFuselage,
+      Paint()
+        ..color = const Color(0xFF0F172A)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.25
+        ..strokeJoin = StrokeJoin.round,
+    );
 
-    // Bright angular cockpit glass
+    // Beveled front nose plate & subtle amber centerline accent
+    final Path noseBevel = Path()
+      ..moveTo(cx + 18.2, cy - 1.5)
+      ..lineTo(cx + 13.6, cy - 4.2)
+      ..lineTo(cx + 13.6, cy + 4.2)
+      ..lineTo(cx + 18.2, cy + 1.5)
+      ..close();
+    canvas.drawPath(noseBevel, Paint()..color = const Color(0xFF334155));
+    canvas.drawPath(
+      noseBevel,
+      Paint()
+        ..color = const Color(0xA6E2E8F0)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9,
+    );
+    canvas.drawLine(
+      Offset(cx + 17.5, cy),
+      Offset(cx + 14.3, cy),
+      Paint()
+        ..color = const Color(0xE6F59E0B)
+        ..strokeWidth = 1.7
+        ..strokeCap = StrokeCap.round,
+    );
+
+    canvas.drawLine(
+      Offset(cx - 1.8, cy - 8.6),
+      Offset(cx - 1.8, cy + 8.6),
+      Paint()
+        ..color = const Color(0xCC0F172A)
+        ..strokeWidth = 1.05,
+    );
+    final Paint louverPaint = Paint()
+      ..color = const Color(0xE00F172A)
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.round;
+    for (final double lx in <double>[cx - 6.0, cx - 9.4, cx - 12.8]) {
+      canvas.drawLine(Offset(lx, cy - 4.6), Offset(lx, cy + 4.6), louverPaint);
+    }
+
+    // 5. Glowing Cockpit Canopy near the Front-Center
     final Path cockpit = Path()
-      ..moveTo(cx + 17.5, cy)
-      ..lineTo(cx + 11.5, cy - 4.4)
-      ..lineTo(cx + 4.8, cy - 3.6)
-      ..lineTo(cx + 3.2, cy)
-      ..lineTo(cx + 4.8, cy + 3.6)
-      ..lineTo(cx + 11.5, cy + 4.4)
+      ..moveTo(cx + 13.2, cy)
+      ..cubicTo(
+        cx + 10.6, cy - 3.6,
+        cx + 5.6, cy - 4.4,
+        cx + 0.8, cy - 3.2,
+      )
+      ..lineTo(cx - 0.8, cy)
+      ..lineTo(cx + 0.8, cy + 3.2)
+      ..cubicTo(
+        cx + 5.6, cy + 4.4,
+        cx + 10.6, cy + 3.6,
+        cx + 13.2, cy,
+      )
       ..close();
     canvas.drawPath(
       cockpit,
       Paint()
+        ..color = const Color(0xFF38BDF8).withOpacity(0.24 * glowPulse)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.2,
+    );
+    canvas.drawPath(
+      cockpit,
+      Paint()
         ..shader = ui.Gradient.linear(
-          Offset(cx + 16.0, cy - 4.5),
-          Offset(cx + 3.0, cy + 4.5),
+          Offset(cx + 12.0, cy - 4.4),
+          Offset(cx - 1.0, cy + 4.4),
           const <Color>[
-            Color(0xFFE0F2FE),
+            Color(0xFFF0F9FF),
             Color(0xFF38BDF8),
-            Color(0xFF0369A1),
+            Color(0xFF0284C7),
+            Color(0xFF0C4A6E),
           ],
-          const <double>[0.0, 0.45, 1.0],
+          const <double>[0.0, 0.35, 0.7, 1.0],
         ),
     );
     canvas.drawPath(
@@ -3521,31 +3798,31 @@ class PlayerShipComponent extends PositionComponent
       Paint()
         ..color = const Color(0xFF0F172A)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.15,
+        ..strokeWidth = 1.2,
     );
     canvas.drawLine(
-      Offset(cx + 11.2, cy - 3.8),
-      Offset(cx + 11.2, cy + 3.8),
+      Offset(cx + 6.4, cy - 3.6),
+      Offset(cx + 5.8, cy + 3.6),
       Paint()
-        ..color = const Color(0xFF0F172A)
-        ..strokeWidth = 0.9,
+        ..color = const Color(0xD90F172A)
+        ..strokeWidth = 0.95,
     );
     canvas.drawLine(
-      Offset(cx + 14.5, cy - 1.2),
-      Offset(cx + 8.5, cy - 2.3),
+      Offset(cx + 10.4, cy - 1.1),
+      Offset(cx + 3.0, cy - 2.1),
       Paint()
-        ..color = const Color(0xE6FFFFFF)
-        ..strokeWidth = 1.25
+        ..color = const Color(0xF0FFFFFF)
+        ..strokeWidth = 1.35
         ..strokeCap = StrokeCap.round,
     );
 
     if (flash > 0.08) {
       canvas.drawPath(
-        cruiserHull,
+        goliathHull,
         Paint()..color = const Color(0xFFFF6D00).withOpacity(0.35 * flash),
       );
       canvas.drawPath(
-        cruiserHull,
+        goliathHull,
         Paint()
           ..color = const Color(0xFFFFB74D).withOpacity(0.80 * flash)
           ..style = PaintingStyle.stroke
@@ -5162,7 +5439,7 @@ class ConfigButtonComponent extends PositionComponent
 
 class FormationButtonComponent extends PositionComponent
     with TapCallbacks, HasGameRef<DarkOrbitGame> {
-  FormationButtonComponent() : super(size: Vector2(68.0, 38.0));
+  FormationButtonComponent() : super(size: Vector2(68.0, 38.0), priority: 42);
 
   @override
   void onGameResize(Vector2 size) {
@@ -5172,7 +5449,7 @@ class FormationButtonComponent extends PositionComponent
 
   @override
   void onTapDown(TapDownEvent event) {
-    gameRef.cycleOwnedFormation();
+    gameRef.isFormationMenuOpen = !gameRef.isFormationMenuOpen;
   }
 
   @override
@@ -5180,29 +5457,35 @@ class FormationButtonComponent extends PositionComponent
     final DroneFormationSpec spec = gameRef.activeFormationSpec;
     final double cd = gameRef.formationSwitchCooldown;
     final bool onCooldown = cd > 0.05;
-    final Color accent =
-        onCooldown ? const Color(0xFF64748B) : spec.accentColor;
+    final bool open = gameRef.isFormationMenuOpen;
+    final Color accent = open
+        ? const Color(0xFF00E5FF)
+        : (onCooldown ? const Color(0xFF64748B) : spec.accentColor);
     final RRect rr = RRect.fromRectAndRadius(
       Offset.zero & Size(size.x, size.y),
       const Radius.circular(8.0),
     );
-    canvas.drawRRect(rr, Paint()..color = const Color(0xCC0B1324));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = open ? const Color(0xE60B2239) : const Color(0xCC0B1324),
+    );
     canvas.drawRRect(
       rr,
       Paint()
         ..color = accent
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6,
+        ..strokeWidth = open ? 2.0 : 1.6,
     );
     TextPaint(
       style: TextStyle(
         color: accent,
-        fontSize: 10.8,
+        fontSize: 10.0,
         fontWeight: FontWeight.bold,
       ),
     ).render(
       canvas,
-      spec.shortCode,
+      '${spec.shortCode} ${open ? "▲" : "▼"}',
       Vector2(size.x * 0.5, 13.0),
       anchor: Anchor.center,
     );
@@ -5216,10 +5499,165 @@ class FormationButtonComponent extends PositionComponent
       canvas,
       onCooldown
           ? '${cd.ceil()}s'
-          : (gameRef.ownedFormations.length > 1 ? 'FMN' : '1/6'),
+          : 'FMN ${gameRef.ownedFormations.length}/${DroneFormation.values.length}',
       Vector2(size.x * 0.5, 27.0),
       anchor: Anchor.center,
     );
+  }
+}
+
+class FormationSubmenuComponent extends PositionComponent
+    with TapCallbacks, HasGameRef<DarkOrbitGame> {
+  FormationSubmenuComponent() : super(priority: 41);
+
+  static const double _pillHeight = 32.0;
+  static const double _pillGap = 6.0;
+  static const double _padX = 8.0;
+  static const double _padY = 6.0;
+  static const double _defaultPillW = 78.0;
+
+  Vector2 _viewportSize = Vector2(800.0, 400.0);
+  double _pillWidth = _defaultPillW;
+
+  List<DroneFormation> get _ownedOrdered => DroneFormation.values
+      .where((DroneFormation f) => gameRef.ownedFormations.contains(f))
+      .toList();
+
+  void _syncBounds() {
+    final List<DroneFormation> owned = _ownedOrdered;
+    final int count = max(1, owned.length);
+    // Keep horizontal bar cleanly left of the top-right minimap & well above the screen center/joysticks
+    final double maxBarWidth = max(140.0, _viewportSize.x - 166.0);
+    final double idealWidth =
+        _padX * 2.0 + count * _defaultPillW + max(0, count - 1) * _pillGap;
+    final double barW = min(idealWidth, maxBarWidth);
+    _pillWidth = ((barW - _padX * 2.0 - max(0, count - 1) * _pillGap) / count)
+        .clamp(48.0, _defaultPillW);
+    final double barH = _padY * 2.0 + _pillHeight;
+    size = Vector2(barW, barH);
+
+    // Center neatly below FormationButtonComponent (x=436..504), clamped inside safe HUD band
+    final double desiredLeft = 470.0 - barW * 0.5;
+    final double maxLeft = max(12.0, _viewportSize.x - barW - 150.0);
+    final double targetX = desiredLeft.clamp(12.0, maxLeft);
+    position = Vector2(targetX, 56.0);
+  }
+
+  @override
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
+    _viewportSize = size.clone();
+    _syncBounds();
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    if (gameRef.isFormationMenuOpen) {
+      _syncBounds();
+    }
+  }
+
+  @override
+  bool containsLocalPoint(Vector2 point) {
+    if (!gameRef.isFormationMenuOpen) return false;
+    return super.containsLocalPoint(point);
+  }
+
+  @override
+  void onTapDown(TapDownEvent event) {
+    if (!gameRef.isFormationMenuOpen) return;
+    final List<DroneFormation> owned = _ownedOrdered;
+    final double localX = event.localPosition.x - _padX;
+    if (localX >= 0.0) {
+      final double stride = _pillWidth + _pillGap;
+      final int idx = (localX / stride).floor();
+      if (idx >= 0 && idx < owned.length) {
+        final DroneFormation chosen = owned[idx];
+        if (chosen != gameRef.activeFormation &&
+            gameRef.formationSwitchCooldown <= 0.05) {
+          gameRef.selectOwnedFormationFromHud(chosen);
+        }
+        gameRef.isFormationMenuOpen = false;
+        return;
+      }
+    }
+    gameRef.isFormationMenuOpen = false;
+  }
+
+  @override
+  void render(Canvas canvas) {
+    if (!gameRef.isFormationMenuOpen) return;
+    _syncBounds();
+    final List<DroneFormation> owned = _ownedOrdered;
+    final double cd = gameRef.formationSwitchCooldown;
+    final bool onCooldown = cd > 0.05;
+
+    final RRect bg = RRect.fromRectAndRadius(
+      Offset.zero & Size(size.x, size.y),
+      const Radius.circular(14.0),
+    );
+    canvas.drawRRect(bg, Paint()..color = const Color(0xF0071020));
+    canvas.drawRRect(
+      bg,
+      Paint()
+        ..color = onCooldown ? const Color(0xCCFBBF24) : const Color(0xB800E5FF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.35,
+    );
+
+    double x = _padX;
+    final double y = _padY;
+    for (final DroneFormation f in owned) {
+      final DroneFormationSpec spec = DroneFormationCatalog.of(f);
+      final bool isActive = f == gameRef.activeFormation;
+      final RRect pillRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, y, _pillWidth, _pillHeight),
+        const Radius.circular(16.0),
+      );
+      canvas.drawRRect(
+        pillRect,
+        Paint()
+          ..color =
+              isActive ? const Color(0x3800E5FF) : const Color(0xB30D182C),
+      );
+      canvas.drawRRect(
+        pillRect,
+        Paint()
+          ..color =
+              isActive ? const Color(0xFF00E5FF) : const Color(0xFF1E3A5F)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = isActive ? 1.8 : 1.0,
+      );
+
+      // Compact colored formation dot
+      canvas.drawCircle(
+        Offset(x + 11.0, y + _pillHeight * 0.5),
+        3.5,
+        Paint()..color = spec.accentColor,
+      );
+
+      final String label = _pillWidth >= 66.0
+          ? spec.displayName.toUpperCase()
+          : spec.shortCode;
+      TextPaint(
+        style: TextStyle(
+          color: isActive
+              ? Colors.white
+              : (onCooldown ? const Color(0xFF64748B) : spec.accentColor),
+          fontSize: _pillWidth >= 66.0 ? 10.2 : 9.8,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.3,
+        ),
+      ).render(
+        canvas,
+        label,
+        Vector2(x + (_pillWidth + 10.0) * 0.5, y + _pillHeight * 0.5),
+        anchor: Anchor.center,
+      );
+
+      x += _pillWidth + _pillGap;
+    }
   }
 }
 
@@ -5874,8 +6312,10 @@ class MinimapComponent extends PositionComponent
       );
     }
 
-    // Nearby Normal & Pulsing BOSS Aliens within 4,500u radius
-    const double alienCutoffSq = (viewRadius + 260.0) * (viewRadius + 260.0);
+    // Local Radar Detection Range: only show Normal & BOSS Aliens within 2,800 world units
+    const double alienCutoffSq =
+        GameConstants.alienRadarDetectionRange *
+        GameConstants.alienRadarDetectionRange;
     for (final AlienShipComponent alien in gameRef.aliens) {
       final double dx = alien.position.x - playerX;
       final double dy = alien.position.y - playerY;

@@ -140,6 +140,30 @@ fun HangarShopOverlay(
                         softWrap = false
                     )
 
+                    if (!hud.pilotName.isNullOrBlank() && hud.pilotCompany != null) {
+                        val compColor = Color(hud.pilotCompany.primaryColorHex)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(hud.pilotCompany.darkBgColorHex))
+                                .border(1.dp, compColor.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 7.dp, vertical = 4.dp)
+                                .testTag("hangar_pilot_badge")
+                        ) {
+                            CompanyEmblemCanvas(company = hud.pilotCompany, size = 15.dp)
+                            Text(
+                                text = "[${hud.pilotCompany.tag}] ${hud.pilotName}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = compColor,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         modifier = Modifier

@@ -5,12 +5,14 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +24,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
@@ -37,6 +42,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -696,8 +702,8 @@ fun TacticalMinimap(
                     )
                 }
 
-                // Nearby Normal & Pulsing BOSS Aliens within 4,500-unit radar radius
-                val alienCutoffSq = (viewRadius + 260f) * (viewRadius + 260f)
+                // Local Radar Detection Range: only show Normal & BOSS Aliens within 2,800 world units
+                val alienCutoffSq = GameConfig.ALIEN_RADAR_DETECTION_RANGE * GameConfig.ALIEN_RADAR_DETECTION_RANGE
                 val lockedId = engine.lockedAlienId
                 for (alien in engine.aliens) {
                     val dx = alien.x - playerX
@@ -1177,9 +1183,35 @@ fun ExpandableTacticalMapOverlay(
                         )
                     }
 
-                    // Aliens (normal & pulsing BOSS)
+                    val playerPos = worldToCanvas(
+                        if (isMapX1) engine.player.x.coerceIn(0f, GameConfig.MAP_X1_SIZE) else engine.player.x,
+                        if (isMapX1) engine.player.y.coerceIn(0f, GameConfig.MAP_X1_SIZE) else engine.player.y
+                    )
+                    val px = playerPos.x
+                    val py = playerPos.y
+
+                    // Faint translucent cyan 2,800-unit active ship sensor scanner range circle
+                    val scannerRadiusPx = GameConfig.ALIEN_RADAR_DETECTION_RANGE * scale
+                    drawCircle(
+                        color = CyanLaser.copy(alpha = 0.065f),
+                        radius = scannerRadiusPx,
+                        center = playerPos
+                    )
+                    drawCircle(
+                        color = CyanLaser.copy(alpha = 0.34f),
+                        radius = scannerRadiusPx,
+                        center = playerPos,
+                        style = Stroke(width = 1.35f)
+                    )
+
+                    // Aliens (normal & pulsing BOSS) — ONLY rendered within 2,800-unit ship sensor range
+                    val alienDetectSq = GameConfig.ALIEN_RADAR_DETECTION_RANGE * GameConfig.ALIEN_RADAR_DETECTION_RANGE
                     val lockedId = engine.lockedAlienId
                     for (alien in engine.aliens) {
+                        val adx = alien.x - engine.player.x
+                        val ady = alien.y - engine.player.y
+                        if (adx * adx + ady * ady > alienDetectSq) continue
+
                         val aPos = worldToCanvas(alien.x, alien.y)
                         val tierColor = Color(alien.tier.primaryColorHex)
 
@@ -1216,13 +1248,6 @@ fun ExpandableTacticalMapOverlay(
                             )
                         }
                     }
-
-                    val playerPos = worldToCanvas(
-                        if (isMapX1) engine.player.x.coerceIn(0f, GameConfig.MAP_X1_SIZE) else engine.player.x,
-                        if (isMapX1) engine.player.y.coerceIn(0f, GameConfig.MAP_X1_SIZE) else engine.player.y
-                    )
-                    val px = playerPos.x
-                    val py = playerPos.y
 
                     // Active Autopilot Dashed Route & Crosshair
                     val apX = engine.autopilotTargetX
@@ -1307,7 +1332,7 @@ fun TopTacticalHud(
     hud: HudSnapshot,
     onOpenHangar: () -> Unit,
     onToggleConfig: () -> Unit,
-    onCycleFormation: () -> Unit,
+    onSelectFormation: (DroneFormation) -> Unit,
     onCancelAutopilot: () -> Unit,
     onClaimMission: () -> Unit,
     onTogglePause: () -> Unit,
@@ -1468,48 +1493,168 @@ fun TopTacticalHud(
                 )
             }
 
-            // Compact Drone Formation Switcher Button (3-second cooldown)
+            // Interactive VANT Formation Dropdown Submenu Button
             val fmDesc = stringResource(R.string.cd_cycle_formation)
             val fmColor = Color(hud.activeFormation.accentHex)
             val fmOnCooldown = hud.formationCooldownRemaining > 0.05f
-            val fmCanCycle = hud.ownedFormationCount > 1 && !fmOnCooldown
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (fmOnCooldown) Color(0xCC0D1628) else SpaceHudPanel)
-                    .border(
-                        width = 1.4.dp,
-                        color = if (fmOnCooldown) TacticalMuted.copy(alpha = 0.5f) else fmColor.copy(alpha = 0.8f),
-                        shape = RoundedCornerShape(10.dp)
+            var isFormationMenuOpen by remember { mutableStateOf(false) }
+            val ownedFormations = remember(hud.equipment.ownedFormations) {
+                DroneFormation.entries.filter { it in hud.equipment.ownedFormations }
+            }
+
+            Box {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            when {
+                                isFormationMenuOpen -> Color(0xE60B2239)
+                                fmOnCooldown -> Color(0xCC0D1628)
+                                else -> SpaceHudPanel
+                            }
+                        )
+                        .border(
+                            width = if (isFormationMenuOpen) 1.8.dp else 1.4.dp,
+                            color = when {
+                                isFormationMenuOpen -> CyanLaser
+                                fmOnCooldown -> TacticalMuted.copy(alpha = 0.5f)
+                                else -> fmColor.copy(alpha = 0.8f)
+                            },
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .clickable { isFormationMenuOpen = !isFormationMenuOpen }
+                        .padding(horizontal = 9.dp)
+                        .testTag("formation_menu_button")
+                        .semantics { contentDescription = fmDesc }
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(1.dp)
+                    ) {
+                        Text(
+                            text = hud.activeFormation.shortCode,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (fmOnCooldown) TacticalMuted else fmColor,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            tint = if (isFormationMenuOpen) CyanLaser else fmColor,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Text(
+                        text = if (fmOnCooldown) {
+                            "${ceil(hud.formationCooldownRemaining.toDouble()).toInt()}s"
+                        } else {
+                            "FMN ${ownedFormations.size}/${DroneFormation.entries.size}"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (fmOnCooldown) AmberCredits else TacticalMuted,
+                        maxLines = 1,
+                        softWrap = false
                     )
-                    .clickable(enabled = fmCanCycle, onClick = onCycleFormation)
-                    .padding(horizontal = 9.dp)
-                    .testTag("formation_cycle_button")
-                    .semantics { contentDescription = fmDesc }
-            ) {
-                Text(
-                    text = hud.activeFormation.shortCode,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (fmOnCooldown) TacticalMuted else fmColor,
-                    maxLines = 1,
-                    softWrap = false
-                )
-                Text(
-                    text = if (fmOnCooldown) {
-                        "${ceil(hud.formationCooldownRemaining.toDouble()).toInt()}s"
-                    } else if (hud.ownedFormationCount > 1) {
-                        "FMN"
-                    } else {
-                        "1/${DroneFormation.entries.size}"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (fmOnCooldown) AmberCredits else TacticalMuted,
-                    maxLines = 1,
-                    softWrap = false
-                )
+                }
+
+                DropdownMenu(
+                    expanded = isFormationMenuOpen,
+                    onDismissRequest = { isFormationMenuOpen = false },
+                    containerColor = Color(0xF0071020),
+                    border = BorderStroke(
+                        1.3.dp,
+                        if (fmOnCooldown) AmberCredits.copy(alpha = 0.85f) else CyanLaser.copy(alpha = 0.78f)
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .widthIn(max = 520.dp)
+                        .testTag("formation_dropdown_menu")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        if (fmOnCooldown) {
+                            Text(
+                                text = "CD ${ceil(hud.formationCooldownRemaining.toDouble()).toInt()}s",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmberCredits,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0x33FBBF24))
+                                    .border(1.dp, AmberCredits.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 7.dp, vertical = 5.dp)
+                            )
+                        }
+
+                        for (formation in ownedFormations) {
+                            val isActive = formation == hud.activeFormation
+                            val accent = Color(formation.accentHex)
+                            val canActivate = !isActive && !fmOnCooldown
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                modifier = Modifier
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(17.dp))
+                                    .background(
+                                        if (isActive) Color(0x3800E5FF) else Color(0xB30D182C)
+                                    )
+                                    .border(
+                                        width = if (isActive) 1.8.dp else 1.dp,
+                                        color = if (isActive) CyanLaser else SpaceHudBorder,
+                                        shape = RoundedCornerShape(17.dp)
+                                    )
+                                    .clickable {
+                                        if (canActivate) {
+                                            onSelectFormation(formation)
+                                        }
+                                        isFormationMenuOpen = false
+                                    }
+                                    .padding(horizontal = 10.dp)
+                                    .testTag("formation_option_${formation.name.lowercase()}")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(accent)
+                                )
+                                Text(
+                                    text = formation.displayName.uppercase(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when {
+                                        isActive -> Color.White
+                                        fmOnCooldown -> TacticalMuted
+                                        else -> accent
+                                    },
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                                if (isActive) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = CyanLaser,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             val hangarDesc = stringResource(R.string.cd_hangar_open)

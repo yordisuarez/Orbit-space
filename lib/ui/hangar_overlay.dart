@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../game/dark_orbit_game.dart';
+import 'intro_onboarding_screens.dart';
 
 class HangarOverlay extends StatefulWidget {
   const HangarOverlay({
@@ -163,6 +164,46 @@ class _HangarOverlayState extends State<HangarOverlay> {
                             letterSpacing: 1.0,
                           ),
                         ),
+                        if (game.formattedPilotCallsign != null &&
+                            game.pilotCompany != null &&
+                            game.pilotCompanySpec != null) ...<Widget>[
+                          const SizedBox(width: 8.0),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7.0,
+                              vertical: 4.0,
+                            ),
+                            decoration: BoxDecoration(
+                              color: game.pilotCompanySpec!.darkBgColor,
+                              borderRadius: BorderRadius.circular(8.0),
+                              border: Border.all(
+                                color: game.pilotCompanySpec!.primaryColor
+                                    .withOpacity(0.65),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                CompanyEmblemWidget(
+                                  company: game.pilotCompany!,
+                                  size: 15.0,
+                                ),
+                                const SizedBox(width: 5.0),
+                                Text(
+                                  game.formattedPilotCallsign!,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: game.pilotCompanySpec!.primaryColor,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(width: 8.0),
                         Container(
                           padding: const EdgeInsets.all(3.0),

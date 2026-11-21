@@ -29,7 +29,7 @@ class GameConstants {
   static const double sectorScalingBase = 2.5;
 
   static const double bossSpawnChance = 0.20;
-  static const double bossHpMultiplier = 4.0;
+  static const double bossHpMultiplier = 6.6;
   static const double bossDamageMultiplier = 2.0;
   static const int bossRewardMultiplier = 4;
   static const double bossSizeMultiplier = 1.5;
@@ -37,6 +37,7 @@ class GameConstants {
   static const double autopilotStopRadius = 60.0;
   static const double autopilotMaxTargetRadius = 19800.0;
   static const double hudMinimapViewRadius = 4500.0;
+  static const double alienRadarDetectionRange = 2800.0;
 
   // Jump Gate Portal & Classic Square Map (MAP X-1)
   static const double mainJumpGateX = 220.0;
@@ -173,6 +174,78 @@ enum GameMap {
 extension GameMapMeta on GameMap {
   String get displayName => this == GameMap.mapX1 ? 'MAP X-1' : 'MAIN MAP';
   String get gateLabel => this == GameMap.mapX1 ? 'GATE: BASE' : 'GATE: X-1';
+}
+
+enum PilotCompany {
+  solaris,
+  aether,
+  verdant,
+}
+
+class PilotCompanySpec {
+  const PilotCompanySpec({
+    required this.company,
+    required this.id,
+    required this.displayName,
+    required this.tag,
+    required this.lore,
+    required this.primaryColor,
+    required this.darkBgColor,
+  });
+
+  final PilotCompany company;
+  final String id;
+  final String displayName;
+  final String tag;
+  final String lore;
+  final Color primaryColor;
+  final Color darkBgColor;
+}
+
+class PilotCompanyCatalog {
+  static const Map<PilotCompany, PilotCompanySpec> specs =
+      <PilotCompany, PilotCompanySpec>{
+    PilotCompany.solaris: PilotCompanySpec(
+      company: PilotCompany.solaris,
+      id: 'solaris',
+      displayName: 'SOLARIS',
+      tag: 'SOL',
+      lore: 'Aggressive mining & combat syndicate.',
+      primaryColor: Color(0xFFFF3B5C),
+      darkBgColor: Color(0xFF240912),
+    ),
+    PilotCompany.aether: PilotCompanySpec(
+      company: PilotCompany.aether,
+      id: 'aether',
+      displayName: 'AETHER',
+      tag: 'AET',
+      lore: 'High-tech tactical defense corporation.',
+      primaryColor: Color(0xFF00E5FF),
+      darkBgColor: Color(0xFF061E2B),
+    ),
+    PilotCompany.verdant: PilotCompanySpec(
+      company: PilotCompany.verdant,
+      id: 'verdant',
+      displayName: 'VERDANT',
+      tag: 'VER',
+      lore: 'Wealthy trade & exploration empire.',
+      primaryColor: Color(0xFF22C55E),
+      darkBgColor: Color(0xFF072416),
+    ),
+  };
+
+  static PilotCompanySpec of(PilotCompany company) => specs[company]!;
+
+  static PilotCompany? fromId(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    final String lower = raw.trim().toLowerCase();
+    for (final PilotCompanySpec spec in specs.values) {
+      if (spec.id == lower || spec.company.name == lower) {
+        return spec.company;
+      }
+    }
+    return null;
+  }
 }
 
 enum SpaceZone {

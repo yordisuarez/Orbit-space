@@ -1,5 +1,5 @@
 name: dark_orbit_mobile
-description: Offline 2D space combat prototype inspired by DarkOrbit using Flutter and Flame.
+description: Offline 2D space combat game Orbi Space using Flutter and Flame.
 publish_to: 'none'
 version: 1.0.0+1
 

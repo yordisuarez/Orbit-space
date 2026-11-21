@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "DarkOrbitMobile"
+rootProject.name = "OrbiSpace"
 
 include(":app")

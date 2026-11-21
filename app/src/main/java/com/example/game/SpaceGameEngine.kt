@@ -114,6 +114,23 @@ class SpaceGameEngine(
     var elapsedTime: Float = 0f
         private set
 
+    // Pilot Profile (Company + Callsign) persisted via SharedPreferences
+    var pilotName: String? = null
+        private set
+    var pilotCompany: PilotCompany? = null
+        private set
+
+    val hasRegisteredPilot: Boolean
+        get() = !pilotName.isNullOrBlank() && pilotCompany != null
+
+    fun setPilotProfile(name: String, company: PilotCompany) {
+        val cleaned = name.trim().take(14)
+        if (cleaned.length < 3) return
+        pilotName = cleaned
+        pilotCompany = company
+        requestSave()
+    }
+
     var moveInputX: Float = 0f
         private set
     var moveInputY: Float = 0f
@@ -166,11 +183,15 @@ class SpaceGameEngine(
             activeFormation = activeFormation,
             equippedSectorChipId = equippedSectorChip?.instanceId,
             currentMissionIndex = currentMissionIndex,
-            currentMissionProgress = currentMissionProgress
+            currentMissionProgress = currentMissionProgress,
+            pilotName = pilotName,
+            companyId = pilotCompany?.id
         )
     }
 
     fun restoreSaveState(state: SaveState) {
+        pilotName = state.pilotName?.trim()?.takeIf { it.length in 3..14 }
+        pilotCompany = PilotCompany.fromId(state.companyId)
         credits = state.credits.coerceAtLeast(0)
         kills = state.kills.coerceAtLeast(0)
         player.level = state.level.coerceAtLeast(1)
@@ -277,6 +298,8 @@ class SpaceGameEngine(
 
     fun resetSector(keepProgress: Boolean, triggerSave: Boolean = true) {
         if (!keepProgress) {
+            pilotName = null
+            pilotCompany = null
             credits = 0
             kills = 0
             player.level = 1
@@ -684,6 +707,29 @@ class SpaceGameEngine(
         return true
     }
 
+    fun selectOwnedFormationFromHud(formation: DroneFormation): Boolean {
+        if (!player.isAlive || isPaused || isHangarOpen) return false
+        if (formation !in ownedFormations) return false
+        if (activeFormation == formation) return false
+        if (formationSwitchCooldown > 0.05f) return false
+        activeFormation = formation
+        formationSwitchCooldown = GameConfig.FORMATION_SWITCH_COOLDOWN_SEC
+        recalculateShipStats(refillVitals = false)
+        popups.add(
+            FloatingPopup(
+                x = player.x,
+                y = player.y - activeShipClass.hullRadius - 36f,
+                text = "${formation.displayName.uppercase()} FORMATION",
+                life = 1.25f,
+                maxLife = 1.25f,
+                colorRgb = (formation.accentHex and 0xFFFFFF).toInt(),
+                textSize = 14.5f
+            )
+        )
+        requestSave()
+        return true
+    }
+
     fun cycleOwnedFormation(): Boolean {
         if (!player.isAlive || isPaused || isHangarOpen) return false
         if (formationSwitchCooldown > 0.05f) return false
@@ -691,22 +737,7 @@ class SpaceGameEngine(
         if (ordered.size <= 1) return false
         val currentIdx = ordered.indexOf(activeFormation).coerceAtLeast(0)
         val next = ordered[(currentIdx + 1) % ordered.size]
-        activeFormation = next
-        formationSwitchCooldown = GameConfig.FORMATION_SWITCH_COOLDOWN_SEC
-        recalculateShipStats(refillVitals = false)
-        popups.add(
-            FloatingPopup(
-                x = player.x,
-                y = player.y - activeShipClass.hullRadius - 36f,
-                text = "${next.displayName.uppercase()} FORMATION",
-                life = 1.25f,
-                maxLife = 1.25f,
-                colorRgb = (next.accentHex and 0xFFFFFF).toInt(),
-                textSize = 14.5f
-            )
-        )
-        requestSave()
-        return true
+        return selectOwnedFormationFromHud(next)
     }
 
     // -------------------------------------------------------------------------
@@ -1379,6 +1410,8 @@ class SpaceGameEngine(
             activeMap = activeMap,
             isNearJumpGate = isPlayerNearJumpGate(),
             jumpGateLabel = activeMap.gateLabel,
+            pilotName = pilotName,
+            pilotCompany = pilotCompany,
             currentZone = player.currentZone,
             isAutoFireEnabled = player.isAutoFireEnabled,
             rocketCooldownRemaining = player.rocketCooldown,

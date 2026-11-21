@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">DarkOrbit Mobile</string>
+    <string name="app_name">Orbi Space</string>
     <string name="hud_credits_label">CREDITS</string>
     <string name="hud_kills_label">KILLS</string>
     <string name="hud_level_prefix">LV</string>
@@ -97,7 +97,7 @@
     <string name="action_jump_gate">JUMP</string>
     <string name="cd_jump_gate">Activate Jump Gate portal</string>
     <string name="tactical_map_x1_title">TACTICAL MAP • X-1</string>
-    <string name="intro_title">DARK ORBIT MOBILE</string>
+    <string name="intro_title">ORBI SPACE</string>
     <string name="intro_subtitle">ORBITAL COMBAT SECTOR • STARBASE COMMAND</string>
     <string name="intro_action_start">START</string>
     <string name="intro_action_continue_prefix">CONTINUE AS</string>

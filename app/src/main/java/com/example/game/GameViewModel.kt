@@ -20,9 +20,65 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _hudState = MutableStateFlow(engine.buildHudSnapshot())
     val hudState: StateFlow<HudSnapshot> = _hudState.asStateFlow()
 
+    private val _screenStage = MutableStateFlow(AppScreenStage.INTRO)
+    val screenStage: StateFlow<AppScreenStage> = _screenStage.asStateFlow()
+
+    private val _selectedOnboardingCompany = MutableStateFlow<PilotCompany?>(PilotCompany.AETHER)
+    val selectedOnboardingCompany: StateFlow<PilotCompany?> = _selectedOnboardingCompany.asStateFlow()
+
+    private val _pilotNameDraft = MutableStateFlow("")
+    val pilotNameDraft: StateFlow<String> = _pilotNameDraft.asStateFlow()
+
     private var hudAccumulator = 0f
 
+    fun continueAsSavedPilot() {
+        if (engine.hasRegisteredPilot) {
+            _screenStage.value = AppScreenStage.GAMEPLAY
+            _hudState.value = engine.buildHudSnapshot()
+        } else {
+            beginOnboarding()
+        }
+    }
+
+    fun beginOnboarding() {
+        _selectedOnboardingCompany.value = PilotCompany.AETHER
+        _pilotNameDraft.value = ""
+        _screenStage.value = AppScreenStage.ONBOARDING_COMPANY
+    }
+
+    fun goBackToIntro() {
+        _screenStage.value = AppScreenStage.INTRO
+    }
+
+    fun selectOnboardingCompany(company: PilotCompany) {
+        _selectedOnboardingCompany.value = company
+    }
+
+    fun proceedToPilotNameStep() {
+        if (_selectedOnboardingCompany.value != null) {
+            _screenStage.value = AppScreenStage.ONBOARDING_NAME
+        }
+    }
+
+    fun goBackToCompanySelection() {
+        _screenStage.value = AppScreenStage.ONBOARDING_COMPANY
+    }
+
+    fun updatePilotNameDraft(name: String) {
+        _pilotNameDraft.value = name.take(14)
+    }
+
+    fun completePilotRegistration() {
+        val company = _selectedOnboardingCompany.value ?: return
+        val trimmed = _pilotNameDraft.value.trim()
+        if (trimmed.length !in 3..14) return
+        engine.setPilotProfile(trimmed, company)
+        _hudState.value = engine.buildHudSnapshot()
+        _screenStage.value = AppScreenStage.GAMEPLAY
+    }
+
     fun tick(dt: Float) {
+        if (_screenStage.value != AppScreenStage.GAMEPLAY) return
         engine.step(dt)
         hudAccumulator += dt
         if (hudAccumulator >= 0.05f) {
@@ -86,6 +142,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun buyOrSelectFormation(formation: DroneFormation) {
         if (engine.buyOrSelectFormation(formation)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun selectOwnedFormationFromHud(formation: DroneFormation) {
+        if (engine.selectOwnedFormationFromHud(formation)) {
             _hudState.value = engine.buildHudSnapshot()
         }
     }
@@ -207,8 +269,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetSave() {
         persistence.clear()
-        engine.resetSector(keepProgress = false)
+        engine.resetSector(keepProgress = false, triggerSave = false)
+        _selectedOnboardingCompany.value = PilotCompany.AETHER
+        _pilotNameDraft.value = ""
         _hudState.value = engine.buildHudSnapshot()
+        _screenStage.value = AppScreenStage.INTRO
     }
 
     fun debugAddOneMillionCredits() {

@@ -61,13 +61,51 @@ fun SpaceCombatScreen(
     viewModel: GameViewModel = viewModel()
 ) {
     val hud by viewModel.hudState.collectAsStateWithLifecycle()
+    val screenStage by viewModel.screenStage.collectAsStateWithLifecycle()
+    val selectedCompany by viewModel.selectedOnboardingCompany.collectAsStateWithLifecycle()
+    val pilotNameDraft by viewModel.pilotNameDraft.collectAsStateWithLifecycle()
     val engine = viewModel.engine
+
+    when (screenStage) {
+        AppScreenStage.INTRO -> {
+            IntroTitleScreen(
+                savedPilotName = hud.pilotName,
+                savedCompany = hud.pilotCompany,
+                onContinueSaved = { viewModel.continueAsSavedPilot() },
+                onStartNew = { viewModel.beginOnboarding() }
+            )
+            return
+        }
+
+        AppScreenStage.ONBOARDING_COMPANY -> {
+            CompanySelectionScreen(
+                selectedCompany = selectedCompany,
+                onSelectCompany = { viewModel.selectOnboardingCompany(it) },
+                onNext = { viewModel.proceedToPilotNameStep() },
+                onBack = { viewModel.goBackToIntro() }
+            )
+            return
+        }
+
+        AppScreenStage.ONBOARDING_NAME -> {
+            PilotNameRegistrationScreen(
+                company = selectedCompany ?: PilotCompany.AETHER,
+                pilotNameDraft = pilotNameDraft,
+                onPilotNameChange = { viewModel.updatePilotNameDraft(it) },
+                onLaunchShip = { viewModel.completePilotRegistration() },
+                onBack = { viewModel.goBackToCompanySelection() }
+            )
+            return
+        }
+
+        AppScreenStage.GAMEPLAY -> Unit
+    }
 
     var frameTick by remember { mutableLongStateOf(0L) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     val popupPaint = remember { createPopupTextPaint() }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(screenStage) {
         var lastNanos = 0L
         while (true) {
             withFrameNanos { frameNanos ->
@@ -127,7 +165,7 @@ fun SpaceCombatScreen(
                 hud = hud,
                 onOpenHangar = { viewModel.openHangar() },
                 onToggleConfig = { viewModel.toggleConfig() },
-                onCycleFormation = { viewModel.cycleOwnedFormation() },
+                onSelectFormation = { viewModel.selectOwnedFormationFromHud(it) },
                 onCancelAutopilot = { viewModel.cancelAutopilot() },
                 onClaimMission = { viewModel.claimMissionReward() },
                 onTogglePause = { viewModel.togglePause() },

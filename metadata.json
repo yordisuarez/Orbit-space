@@ -1,6 +1,6 @@
 {
-  "name": "DarkOrbit Mobile",
-  "description": "Offline 2D space combat game prototype inspired by DarkOrbit with dual-joystick controls, tactical minimap, and programmatic Canvas graphics.",
+  "name": "Orbi Space",
+  "description": "Offline 2D space combat game Orbi Space with dual-joystick controls, tactical minimap, VANT drone formations, and programmatic Canvas graphics.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
