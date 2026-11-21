@@ -502,6 +502,8 @@ class ResourceSpec {
   final bool isYellowCrystal;
   final bool isDirectUse;
   final bool isRare;
+    Color get accentColor => color;
+  
 
   bool get isRefinable => !isDirectUse && refinesInSectorIds.isNotEmpty;
 
@@ -1337,7 +1339,11 @@ class ResourceNodeEntity {
   double harvestProgress = 0.0;
 
   bool get isDepleted => charges <= 0;
+  double get worldX => x;
+  double get worldY => y;
+  int get chargesRemaining => charges;
 }
+
 
 class AlienWreckEntity {
   AlienWreckEntity({
@@ -1367,6 +1373,10 @@ class AlienWreckEntity {
   double pulsePhase = 0.0;
 
   bool get isDepleted => charges <= 0 || expirationTimerSec <= 0.0;
+    double get worldX => x;
+  double get worldY => y;
+  int get chargesRemaining => charges;
+  
 }
 
 class PlayerShipWreck {
@@ -1408,6 +1418,9 @@ class PlayerShipWreck {
   int get totalGearItems => droppedEquipment.length;
 
   bool get isEmpty => totalCargoUnits <= 0 && totalGearItems <= 0;
+    double get worldX => x;
+  double get worldY => y;
+  
 }
 
 class DeathSummary {
