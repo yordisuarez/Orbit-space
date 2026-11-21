@@ -306,6 +306,8 @@ class CapsulePermanentConfig {
   static const double permanentLaserDamage = 12.0;
   static const double permanentShieldBonus = 80.0;
   static const double miningTimeMultiplier = 1.5;
+  static const String fixedSlotSummary = '1 Laser • 1 Tool • 1 Extra';
+  
 }
 
 class ShipHullDefinition {
@@ -351,7 +353,19 @@ class ShipHullDefinition {
 
 class ShipHullCatalog {
   const ShipHullCatalog._();
-
+  static ShipHullDefinition ofIndustrial(IndustrialType type) {
+    switch (type) {
+      case IndustrialType.miner:
+        return minerT1;
+      case IndustrialType.plasmaCollector:
+        return plasmaCollectorT1;
+      case IndustrialType.mediumHauler:
+        return mediumHaulerT1;
+      case IndustrialType.heavyHauler:
+        return heavyHaulerT1;
+    }
+  }
+  
   static const ShipHullDefinition capsule = ShipHullDefinition(
     id: 'CAPSULE_T1',
     displayName: 'Pilot Capsule',
