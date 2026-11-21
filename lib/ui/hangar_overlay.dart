@@ -119,15 +119,32 @@ class _HangarOverlayState extends State<HangarOverlay> {
     setState(() {});
   }
 
-  void _debugAddLevel() {
-    widget.game.debugAddOneLevel();
+  void _toggleAdminMode() {
+    widget.game.toggleAdminMode();
     setState(() {});
+  }
+
+  void _selectCapsule() {
+    if (widget.game.selectCapsule()) {
+      setState(() {});
+    }
+  }
+
+  void _selectCraftedShip(int shipId) {
+    if (widget.game.selectCraftedShip(shipId)) {
+      setState(() {});
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final DarkOrbitGame game = widget.game;
-    final ShipClassSpec activeShip = game.activeShipSpec;
+    final GameStrings s = GameStrings.of(game.language);
+    final Color activeHullColor = game.activeShipRole == ShipRole.capsule
+        ? const Color(0xFFEF4444)
+        : (game.activeShipRole == ShipRole.industrial
+            ? const Color(0xFFF59E0B)
+            : game.activeShipSpec.accentColor);
 
     return Container(
       color: const Color(0xD4040711),
@@ -382,18 +399,18 @@ class _HangarOverlayState extends State<HangarOverlay> {
                             vertical: 4.0,
                           ),
                           decoration: BoxDecoration(
-                            color: activeShip.accentColor.withOpacity(0.14),
+                            color: activeHullColor.withOpacity(0.14),
                             borderRadius: BorderRadius.circular(6.0),
                             border: Border.all(
-                              color: activeShip.accentColor.withOpacity(0.6),
+                              color: activeHullColor.withOpacity(0.65),
                             ),
                           ),
                           child: Text(
-                            activeShip.displayName.toUpperCase(),
+                            game.activeHullDisplayName.toUpperCase(),
                             maxLines: 1,
                             softWrap: false,
                             style: TextStyle(
-                              color: activeShip.accentColor,
+                              color: activeHullColor,
                               fontSize: 10.5,
                               fontWeight: FontWeight.bold,
                             ),
@@ -427,8 +444,15 @@ class _HangarOverlayState extends State<HangarOverlay> {
                           value: '${game.currentMaxHull.toInt()}',
                           color: const Color(0xFF22C55E),
                         ),
+                        const SizedBox(width: 10.0),
+                        _LiveStatItem(
+                          icon: Icons.inventory_2,
+                          label: 'CARGO',
+                          value: '${game.usedCargoUnits}/${game.activeCargoCapacity}',
+                          color: const Color(0xFFA78BFA),
+                        ),
                         const SizedBox(width: 12.0),
-                        // Temporary Developer / Testing Buttons next to RESET SAVE
+                        // Developer / Testing Buttons next to RESET SAVE
                         OutlinedButton(
                           onPressed: _debugAddCredits,
                           style: OutlinedButton.styleFrom(
@@ -453,24 +477,33 @@ class _HangarOverlayState extends State<HangarOverlay> {
                         ),
                         const SizedBox(width: 5.0),
                         OutlinedButton(
-                          onPressed: _debugAddLevel,
+                          onPressed: _toggleAdminMode,
                           style: OutlinedButton.styleFrom(
-                            backgroundColor: const Color(0x33A855F7),
-                            foregroundColor: const Color(0xFFE9D5FF),
-                            side: const BorderSide(color: Color(0xCCC084FC)),
+                            backgroundColor: game.isAdminMode
+                                ? const Color(0x4422C55E)
+                                : const Color(0x33475569),
+                            foregroundColor: game.isAdminMode
+                                ? const Color(0xFF4ADE80)
+                                : const Color(0xFFCBD5E1),
+                            side: BorderSide(
+                              color: game.isAdminMode
+                                  ? const Color(0xFFFACC15)
+                                  : const Color(0xFF64748B),
+                              width: game.isAdminMode ? 1.5 : 1.0,
+                            ),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8.0,
                               vertical: 4.0,
                             ),
                             minimumSize: const Size(0.0, 28.0),
                           ),
-                          child: const Text(
-                            '+1 LVL',
+                          child: Text(
+                            game.isAdminMode ? s.adminModeOnLabel : s.adminModeOffLabel,
                             maxLines: 1,
                             softWrap: false,
-                            style: TextStyle(
+                            style: const TextStyle(
                               fontSize: 10.0,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
                         ),
@@ -540,10 +573,43 @@ class _HangarOverlayState extends State<HangarOverlay> {
     final Color chipAccent =
         chip?.spec.accentColor ?? const Color(0xFF1E3A5F);
 
+    final GameStrings s = GameStrings.of(game.language);
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
+          if (!game.canSwapShipsHere) ...<Widget>[
+            Container(
+              margin: const EdgeInsets.only(bottom: 8.0),
+              padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+              decoration: BoxDecoration(
+                color: const Color(0x28F59E0B),
+                borderRadius: BorderRadius.circular(8.0),
+                border: Border.all(color: const Color(0xAAF59E0B)),
+              ),
+              child: Row(
+                children: <Widget>[
+                  const Icon(Icons.info_outline, size: 15.0, color: Color(0xFFFBBF24)),
+                  const SizedBox(width: 7.0),
+                  Expanded(
+                    child: Text(
+                      s.hangarReadOnlyNotice,
+                      style: const TextStyle(
+                        color: Color(0xFFFDE68A),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // Permanent Starting Capsule ("Huevo") & Crafted Industrial Fleet
+          _buildFleetBaySection(game, s),
+          const SizedBox(height: 8.0),
+
           Row(
             children: <Widget>[
               Container(
@@ -573,7 +639,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   ],
                 ),
               ),
-              if (game.ownedShipClasses.length > 1) ...<Widget>[
+              if (game.ownedShipClasses.isNotEmpty) ...<Widget>[
                 const SizedBox(width: 8.0),
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -588,12 +654,15 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: ShipClass.values
-                        .where((ShipClass s) => game.ownedShipClasses.contains(s))
+                        .where((ShipClass sc) => game.ownedShipClasses.contains(sc))
                         .map((ShipClass ship) {
-                      final ShipClassSpec s = ShipClassCatalog.of(ship);
-                      final bool active = game.activeShipClass == ship;
+                      final ShipClassSpec spec = ShipClassCatalog.of(ship);
+                      final bool active = game.activeShipRole == ShipRole.combat &&
+                          game.activeShipClass == ship;
                       return GestureDetector(
-                        onTap: () => _buyOrSelectShip(ship),
+                        onTap: game.canSwapShipsHere
+                            ? () => _buyOrSelectShip(ship)
+                            : null,
                         child: Container(
                           margin: const EdgeInsets.symmetric(horizontal: 2.0),
                           padding: const EdgeInsets.symmetric(
@@ -601,11 +670,11 @@ class _HangarOverlayState extends State<HangarOverlay> {
                             vertical: 5.0,
                           ),
                           decoration: BoxDecoration(
-                            color: active ? s.accentColor : Colors.transparent,
+                            color: active ? spec.accentColor : Colors.transparent,
                             borderRadius: BorderRadius.circular(6.0),
                           ),
                           child: Text(
-                            s.displayName.substring(0, 4).toUpperCase(),
+                            spec.displayName.substring(0, 4).toUpperCase(),
                             maxLines: 1,
                             softWrap: false,
                             style: TextStyle(
@@ -796,6 +865,251 @@ class _HangarOverlayState extends State<HangarOverlay> {
                       }).toList(),
                     ),
                   ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFleetBaySection(DarkOrbitGame game, GameStrings s) {
+    final bool capsuleActive = game.activeShipRole == ShipRole.capsule;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+      decoration: BoxDecoration(
+        color: const Color(0xFF071020),
+        borderRadius: BorderRadius.circular(10.0),
+        border: Border.all(color: const Color(0xFF1E3A5F)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: <Widget>[
+              Text(
+                '${s.fleetBayTitle} (${1 + game.ownedCraftedShips.length + game.ownedShipClasses.length})',
+                style: const TextStyle(
+                  color: Color(0xFF00E5FF),
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.7,
+                ),
+              ),
+              Text(
+                game.canSwapShipsHere ? s.dockedSwapReady : s.dockRequiredShort,
+                style: TextStyle(
+                  color: game.canSwapShipsHere
+                      ? const Color(0xFF4ADE80)
+                      : const Color(0xFFFBBF24),
+                  fontSize: 9.8,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6.0),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                // 1. Permanent Starting Escape Capsule ("Huevo")
+                Container(
+                  width: 210.0,
+                  margin: const EdgeInsets.only(right: 8.0),
+                  padding: const EdgeInsets.all(8.0),
+                  decoration: BoxDecoration(
+                    color: capsuleActive
+                        ? const Color(0x28EF4444)
+                        : const Color(0xFF040914),
+                    borderRadius: BorderRadius.circular(9.0),
+                    border: Border.all(
+                      color: capsuleActive
+                          ? const Color(0xFFEF4444)
+                          : const Color(0x88EF4444),
+                      width: capsuleActive ? 1.6 : 1.0,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: <Widget>[
+                          Text(
+                            s.capsuleShipTitle,
+                            style: const TextStyle(
+                              color: Color(0xFFF8FAFC),
+                              fontSize: 11.0,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5.0,
+                              vertical: 2.0,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0x33EF4444),
+                              borderRadius: BorderRadius.circular(4.0),
+                            ),
+                            child: Text(
+                              s.permanentBadge,
+                              style: const TextStyle(
+                                color: Color(0xFFFCA5A5),
+                                fontSize: 8.2,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3.0),
+                      Text(
+                        '${CapsulePermanentConfig.fixedSlotSummary} • ${CapsulePermanentConfig.cargoCapacity}u',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 9.2,
+                        ),
+                      ),
+                      const SizedBox(height: 5.0),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: (!capsuleActive && game.canSwapShipsHere)
+                              ? _selectCapsule
+                              : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFEF4444),
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: capsuleActive
+                                ? const Color(0x3322C55E)
+                                : const Color(0xFF1A2438),
+                            disabledForegroundColor: capsuleActive
+                                ? const Color(0xFF4ADE80)
+                                : const Color(0xFF64748B),
+                            padding: const EdgeInsets.symmetric(vertical: 4.0),
+                            minimumSize: const Size(0.0, 26.0),
+                          ),
+                          child: Text(
+                            capsuleActive ? s.pilotingLabel : s.boardShipLabel,
+                            style: const TextStyle(
+                              fontSize: 9.8,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 2. Crafted Industrial Ships (Miner, Plasma Collector, Medium Hauler, Heavy Hauler)
+                ...game.ownedCraftedShips.map((CraftedShipRecord ship) {
+                  final ShipHullDefinition def =
+                      ShipHullCatalog.ofIndustrial(ship.industrialType);
+                  final bool isActive =
+                      game.activeShipRole == ShipRole.industrial &&
+                          game.activeCraftedShipId == ship.id;
+                  return Container(
+                    width: 205.0,
+                    margin: const EdgeInsets.only(right: 8.0),
+                    padding: const EdgeInsets.all(8.0),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? def.accentColor.withOpacity(0.18)
+                          : const Color(0xFF040914),
+                      borderRadius: BorderRadius.circular(9.0),
+                      border: Border.all(
+                        color: isActive
+                            ? def.accentColor
+                            : def.accentColor.withOpacity(0.55),
+                        width: isActive ? 1.6 : 1.0,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: <Widget>[
+                            Expanded(
+                              child: Text(
+                                def.displayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Color(0xFFF8FAFC),
+                                  fontSize: 11.0,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5.0,
+                                vertical: 2.0,
+                              ),
+                              decoration: BoxDecoration(
+                                color: ship.quality.badgeColor.withOpacity(0.22),
+                                borderRadius: BorderRadius.circular(4.0),
+                              ),
+                              child: Text(
+                                ship.quality.shortTag,
+                                style: TextStyle(
+                                  color: ship.quality.badgeColor,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3.0),
+                        Text(
+                          'HP ${ship.effectiveMaxHull.toInt()} • SHD ${ship.effectiveMaxShield.toInt()} • ${ship.effectiveCargoCapacity}u',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF94A3B8),
+                            fontSize: 9.2,
+                          ),
+                        ),
+                        const SizedBox(height: 5.0),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: (!isActive && game.canSwapShipsHere)
+                                ? () => _selectCraftedShip(ship.id)
+                                : null,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: def.accentColor,
+                              foregroundColor: const Color(0xFF040711),
+                              disabledBackgroundColor: isActive
+                                  ? const Color(0x3322C55E)
+                                  : const Color(0xFF1A2438),
+                              disabledForegroundColor: isActive
+                                  ? const Color(0xFF4ADE80)
+                                  : const Color(0xFF64748B),
+                              padding: const EdgeInsets.symmetric(vertical: 4.0),
+                              minimumSize: const Size(0.0, 26.0),
+                            ),
+                            child: Text(
+                              isActive ? s.pilotingLabel : s.boardShipLabel,
+                              style: const TextStyle(
+                                fontSize: 9.8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
               ],
             ),
           ),
@@ -1114,9 +1428,11 @@ class _HangarOverlayState extends State<HangarOverlay> {
             children: ShipClass.values.map((ShipClass ship) {
               final ShipClassSpec spec = ShipClassCatalog.of(ship);
               final bool isOwned = game.ownedShipClasses.contains(ship);
-              final bool isActive = game.activeShipClass == ship;
-              final bool canAct =
-                  (isOwned && !isActive) || (!isOwned && game.credits >= spec.cost);
+              final bool isActive = game.activeShipRole == ShipRole.combat &&
+                  game.activeShipClass == ship;
+              final bool canAfford = game.isAdminMode || game.credits >= spec.cost;
+              final bool canAct = game.canSwapShipsHere &&
+                  ((isOwned && !isActive) || (!isOwned && canAfford));
               return Expanded(
                 child: Container(
                   margin: EdgeInsets.only(
@@ -1235,7 +1551,11 @@ class _HangarOverlayState extends State<HangarOverlay> {
                           child: Text(
                             isActive
                                 ? 'ACTIVE'
-                                : (isOwned ? 'EQUIP' : 'BUY ${spec.cost} CR'),
+                                : (isOwned
+                                    ? 'EQUIP'
+                                    : (game.isAdminMode
+                                        ? 'FREE (ADMIN)'
+                                        : 'BUY ${spec.cost} CR')),
                             maxLines: 1,
                             softWrap: false,
                             style: const TextStyle(
@@ -1268,7 +1588,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                 final EquipmentSpec spec = EquipmentCatalog.of(id);
                 final int cost = spec.shopCost ?? 0;
                 final int owned = counts[id] ?? 0;
-                final bool canAfford = game.credits >= cost;
+                final bool canAfford = game.isAdminMode || game.credits >= cost;
                 return Expanded(
                   child: Container(
                     margin: const EdgeInsets.only(right: 8.0),
@@ -1337,7 +1657,7 @@ class _HangarOverlayState extends State<HangarOverlay> {
                               minimumSize: const Size(0.0, 34.0),
                             ),
                             child: Text(
-                              'BUY $cost CR',
+                              game.isAdminMode ? 'FREE (ADMIN)' : 'BUY $cost CR',
                               maxLines: 1,
                               softWrap: false,
                               style: const TextStyle(
@@ -1363,12 +1683,15 @@ class _HangarOverlayState extends State<HangarOverlay> {
                     final bool atFusionCap = !atMaxIris &&
                         totalOwned >= GameConstants.maxOwnedVantsForFusion;
                     final bool canBuy = game.canBuyFlaxVant &&
-                        game.credits >= GameConstants.flaxVantCost;
+                        (game.isAdminMode ||
+                            game.credits >= GameConstants.flaxVantCost);
                     final String buttonLabel = atMaxIris
                         ? 'MAX (8/8 IRIS)'
                         : atFusionCap
                             ? 'FUSE FLAX (9/9)'
-                            : 'BUY ${GameConstants.flaxVantCost} CR';
+                            : (game.isAdminMode
+                                ? 'FREE (ADMIN)'
+                                : 'BUY ${GameConstants.flaxVantCost} CR');
                     final String countSubtitle = totalOwned > GameConstants.maxVants
                         ? '1 Slot • $activeCount/${GameConstants.maxVants} (+1 RES)'
                         : '1 Slot • $totalOwned/${GameConstants.maxVants}';
@@ -1483,7 +1806,8 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   final bool isOwned = game.ownedFormations.contains(formation);
                   final bool isActive = game.activeFormation == formation;
                   final bool canAct = (isOwned && !isActive) ||
-                      (!isOwned && game.credits >= spec.cost);
+                      (!isOwned &&
+                          (game.isAdminMode || game.credits >= spec.cost));
                   return Expanded(
                     child: Container(
                       margin: EdgeInsets.only(right: c == 2 ? 0.0 : 8.0),
@@ -1608,7 +1932,9 @@ class _HangarOverlayState extends State<HangarOverlay> {
                                     ? 'ACTIVE'
                                     : (isOwned
                                         ? 'EQUIP'
-                                        : 'BUY ${spec.cost} CR'),
+                                        : (game.isAdminMode
+                                            ? 'FREE (ADMIN)'
+                                            : 'BUY ${spec.cost} CR')),
                                 maxLines: 1,
                                 softWrap: false,
                                 style: const TextStyle(
@@ -2281,12 +2607,16 @@ class _EquipmentTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    spec.statSummary,
+                    item!.quality == CraftQuality.standard
+                        ? spec.statSummary
+                        : '${spec.shortCode} ${item!.quality.shortTag}',
                     maxLines: 1,
                     softWrap: false,
                     style: TextStyle(
-                      color: accent,
-                      fontSize: 8.5,
+                      color: item!.quality == CraftQuality.standard
+                          ? accent
+                          : item!.quality.badgeColor,
+                      fontSize: 8.3,
                       fontWeight: FontWeight.bold,
                     ),
                   ),

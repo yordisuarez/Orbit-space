@@ -112,7 +112,7 @@ class _TacticalMapOverlayState extends State<TacticalMapOverlay>
                       ),
                       const SizedBox(width: 6.0),
                       Text(
-                        'SECTOR ${sector.id} • ${sector.zoneType.shortLabel}',
+                        '${GameStrings.of(widget.game.language).sectorMapTitle} ${sector.id} • ${sector.zoneType.shortLabel}',
                         maxLines: 1,
                         softWrap: false,
                         style: TextStyle(
@@ -122,11 +122,11 @@ class _TacticalMapOverlayState extends State<TacticalMapOverlay>
                         ),
                       ),
                       const SizedBox(width: 8.0),
-                      const Text(
-                        '• Tap to Autopilot',
+                      Text(
+                        '• ${GameStrings.of(widget.game.language).tapToSteerHint}',
                         maxLines: 1,
                         softWrap: false,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Color(0xFF94A3B8),
                           fontSize: 10.5,
                         ),
@@ -161,8 +161,8 @@ class _TacticalMapOverlayState extends State<TacticalMapOverlay>
                       ElevatedButton.icon(
                         onPressed: widget.game.closeTacticalMap,
                         icon: const Icon(Icons.close, size: 14.0),
-                        label: const Text(
-                          'CLOSE',
+                        label: Text(
+                          GameStrings.of(widget.game.language).closeLabel,
                           maxLines: 1,
                           softWrap: false,
                         ),
@@ -349,6 +349,75 @@ class _TacticalMapPainter extends CustomPainter {
         isNextHop ? '★ ${portal.targetSectorId}' : '→ ${portal.targetSectorId}',
         isNextHop ? const Color(0xFF00E5FF) : pColor,
         fontSize: isNextHop ? 10.2 : 9.2,
+      );
+    }
+
+    // Sector Stations (Refinery, Crafting, Market, Black Market)
+    for (final SectorStation st in game.activeStations) {
+      final Offset stPos = worldToCanvas(st.worldX, st.worldY);
+      final Path diamond = Path()
+        ..moveTo(stPos.dx, stPos.dy - 6.0)
+        ..lineTo(stPos.dx + 6.0, stPos.dy)
+        ..lineTo(stPos.dx, stPos.dy + 6.0)
+        ..lineTo(stPos.dx - 6.0, stPos.dy)
+        ..close();
+      canvas.drawPath(diamond, Paint()..color = st.accentColor);
+      canvas.drawPath(
+        diamond,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+      _drawCenteredLabel(
+        canvas,
+        Offset(stPos.dx, stPos.dy + 12.0),
+        st.shortTag,
+        st.accentColor,
+        fontSize: 8.5,
+      );
+    }
+
+    // Mineable Resource Nodes
+    for (final ResourceNodeEntity node in game.resourceNodes) {
+      if (node.chargesRemaining <= 0) continue;
+      final ResourceSpec rSpec = ResourceCatalog.of(node.resourceType);
+      canvas.drawCircle(
+        worldToCanvas(node.worldX, node.worldY),
+        3.0,
+        Paint()..color = rSpec.accentColor.withOpacity(0.85),
+      );
+    }
+
+    // Salvageable Alien Wrecks
+    for (final AlienWreckEntity wreck in game.alienWrecks) {
+      if (wreck.chargesRemaining <= 0) continue;
+      final Offset wPos = worldToCanvas(wreck.worldX, wreck.worldY);
+      canvas.drawRect(
+        Rect.fromCenter(center: wPos, width: 5.5, height: 5.5),
+        Paint()..color = const Color(0xFFFB923C),
+      );
+    }
+
+    // Recoverable Player Ship Wrecks (40% salvageable cargo)
+    for (final PlayerShipWreck pw in game.playerWrecks) {
+      if (pw.sectorId != sector.id) continue;
+      final Offset pPos = worldToCanvas(pw.worldX, pw.worldY);
+      canvas.drawCircle(
+        pPos,
+        8.0 + 3.0 * pulse,
+        Paint()
+          ..color = const Color(0xFF22C55E).withOpacity(0.4 + 0.4 * pulse)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.8,
+      );
+      canvas.drawCircle(pPos, 3.6, Paint()..color = const Color(0xFF22C55E));
+      _drawCenteredLabel(
+        canvas,
+        Offset(pPos.dx, pPos.dy - 12.0),
+        'WRECK',
+        const Color(0xFF4ADE80),
+        fontSize: 8.5,
       );
     }
 

@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'dart:ui';
 
+import 'economy_models.dart';
+
 class GameConstants {
   static const double mapRadius = 20000.0;
   static const double safeZoneRadius = 600.0;
@@ -1206,12 +1208,18 @@ class EquipmentItem {
   const EquipmentItem({
     required this.instanceId,
     required this.id,
+    this.quality = CraftQuality.standard,
   });
 
   final int instanceId;
   final EquipmentItemId id;
+  final CraftQuality quality;
 
   EquipmentSpec get spec => EquipmentCatalog.of(id);
+
+  double get effectiveDamageBonus => quality.applyBonus(spec.damageBonus);
+
+  double get effectiveShieldBonus => quality.applyBonus(spec.shieldBonus);
 }
 
 enum LootBoxKind {

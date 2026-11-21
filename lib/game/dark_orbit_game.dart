@@ -8,11 +8,17 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'economy_models.dart';
 import 'galaxy_map_data.dart';
 import 'game_models.dart';
+import 'game_strings.dart';
+import 'ship_renderer.dart';
 
+export 'economy_models.dart';
 export 'galaxy_map_data.dart';
 export 'game_models.dart';
+export 'game_strings.dart';
+export 'ship_renderer.dart';
 
 class DarkOrbitGame extends FlameGame with TapCallbacks {
   DarkOrbitGame({
@@ -24,13 +30,40 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   static const String hangarOverlayId = 'hangar';
   static const String tacticalMapOverlayId = 'tactical_map';
   static const String galaxyMapOverlayId = 'galaxy_map';
+  static const String menuOverlayId = 'menu';
+  static const String skillsOverlayId = 'skills';
+  static const String inventoryOverlayId = 'inventory';
+  static const String guideOverlayId = 'guide';
+  static const String settingsOverlayId = 'settings';
+  static const String stationOverlayId = 'station';
+  static const String deathOverlayId = 'death';
+
   static const String savePrefsKey = 'dark_orbit_mobile_save_v2';
   static const String pilotNamePrefsKey = 'pilotName';
   static const String companyIdPrefsKey = 'companyId';
+  static const String languagePrefsKey = 'gameLanguage';
 
   String? pilotName;
   PilotCompany? pilotCompany;
   final VoidCallback? onResetToIntro;
+
+  final ValueNotifier<int> uiVersion = ValueNotifier<int>(0);
+  double _uiHudTickAccum = 0.0;
+
+  void notifyUi() {
+    uiVersion.value = uiVersion.value + 1;
+  }
+
+  GameLanguage language = GameLanguage.en;
+
+  // Toggleable Admin / Debug Mode (free testing across Market, Refinery, Crafting, Skills)
+  bool isAdminMode = false;
+  String? adminBannerText;
+  double adminBannerTimer = 0.0;
+
+  // Pinch-to-Zoom Camera State (0.6x - 2.5x) + Dynamic Ship Detail LOD (>= 1.35x)
+  double cameraZoom = kCameraZoomDefault;
+  bool isPinching = false;
 
   PilotCompanySpec? get pilotCompanySpec =>
       pilotCompany != null ? PilotCompanyCatalog.of(pilotCompany!) : null;
@@ -54,9 +87,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   late ConfigButtonComponent configButton;
   late FormationButtonComponent formationButton;
   late FormationSubmenuComponent formationSubmenu;
-  late HangarButtonComponent hangarButton;
   late GalaxyMapButtonComponent galaxyMapButton;
-  late AutopilotBadgeComponent autopilotBadge;
   late MissionHudComponent missionHud;
   late MinimapComponent minimap;
   late TacticalHudComponent tacticalHud;
@@ -65,9 +96,36 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   final List<AlienShipComponent> aliens = <AlienShipComponent>[];
   final List<LootBoxComponent> lootBoxes = <LootBoxComponent>[];
 
-  // Owned Ship Classes & Active Ship Class
+  // Permanent Capsule, Crafted Industrial Ships & Combat Ship Classes
+  ShipRole activeShipRole = ShipRole.capsule;
+  int? activeCraftedShipId;
   final Set<ShipClass> ownedShipClasses = <ShipClass>{ShipClass.interceptor};
   ShipClass activeShipClass = ShipClass.interceptor;
+  final List<CraftedShipRecord> ownedCraftedShips = <CraftedShipRecord>[];
+  final List<CraftedItemRecord> ownedCraftedItems = <CraftedItemRecord>[];
+  int _nextCraftedId = 1;
+  int _nextCraftOutcomeId = 1;
+  CraftOutcome? lastCraftOutcome;
+  int basicToolsOwned = 0;
+
+  // 9 Pilot Skills (Lv 1-99) & Cargo Hold
+  final Map<SkillType, SkillProgress> pilotSkills = createDefaultPilotSkills();
+  final Map<ResourceType, int> rawCargo = <ResourceType, int>{};
+  final Map<ResourceType, int> refinedCargo = <ResourceType, int>{};
+
+  // World Resource Nodes, Alien Wrecks, Player Ship Wrecks & Stations
+  final List<ResourceNodeEntity> resourceNodes = <ResourceNodeEntity>[];
+  final List<AlienWreckEntity> alienWrecks = <AlienWreckEntity>[];
+  final List<PlayerShipWreck> playerWrecks = <PlayerShipWreck>[];
+  List<SectorStation> activeStations = <SectorStation>[];
+  StationKind openStationTab = StationKind.refinery;
+  final Map<String, LocalMarketState> _localMarkets =
+      <String, LocalMarketState>{};
+  ResourceNodeEntity? activeMiningNode;
+  AlienWreckEntity? activeSalvageWreck;
+  double _combatMiningWarnCooldown = 0.0;
+  int _nextWorldEntityId = 1;
+  DeathSummary? lastDeathSummary;
 
   // Classic DarkOrbit VANT Drone Formations
   final Set<DroneFormation> ownedFormations = <DroneFormation>{
@@ -77,7 +135,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   double formationSwitchCooldown = 0.0;
   bool isFormationMenuOpen = false;
 
-  // Tap-to-Fly Autopilot Waypoint
+  // Direct Tap-to-Move Destination Target
   Vector2? autopilotTarget;
 
   // Owned equipment pool + Config 1 & Config 2 Laser/Shield slot grids + Dedicated Sector Chip slot
@@ -122,7 +180,101 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
           ? plottedRoute[1]
           : null;
 
+  bool get isFlyingCapsule => activeShipRole == ShipRole.capsule;
+
+  CraftedShipRecord? get activeCraftedShip {
+    if (activeShipRole != ShipRole.industrial || activeCraftedShipId == null) {
+      return null;
+    }
+    for (final CraftedShipRecord s in ownedCraftedShips) {
+      if (s.instanceId == activeCraftedShipId) return s;
+    }
+    return null;
+  }
+
+  IndustrialType? get activeIndustrialType => activeCraftedShip?.industrialType;
+
   ShipClassSpec get activeShipSpec => ShipClassCatalog.of(activeShipClass);
+
+  double get activeHullRadius {
+    switch (activeShipRole) {
+      case ShipRole.capsule:
+        return CapsulePermanentConfig.hullRadius;
+      case ShipRole.industrial:
+        final IndustrialType? ind = activeIndustrialType;
+        if (ind != null) {
+          return ShipHullCatalog.industrialT1(ind).hullRadius;
+        }
+        return 22.0;
+      case ShipRole.combat:
+        return activeShipSpec.hullRadius;
+    }
+  }
+
+  Color get activeShipAccentColor {
+    switch (activeShipRole) {
+      case ShipRole.capsule:
+        return const Color(0xFF00E5FF);
+      case ShipRole.industrial:
+        return activeIndustrialType?.accentColor ?? const Color(0xFF38BDF8);
+      case ShipRole.combat:
+        return activeShipSpec.accentColor;
+    }
+  }
+
+  String get activeShipDisplayName {
+    switch (activeShipRole) {
+      case ShipRole.capsule:
+        return GameStrings.t(language, 'Pilot Capsule', 'Cápsula');
+      case ShipRole.industrial:
+        final IndustrialType? ind = activeIndustrialType;
+        if (ind != null) {
+          return GameStrings.industrialTypeName(ind, language);
+        }
+        return 'Industrial';
+      case ShipRole.combat:
+        return activeShipSpec.displayName;
+    }
+  }
+
+  int get currentCargoCapacity {
+    switch (activeShipRole) {
+      case ShipRole.capsule:
+        return CapsulePermanentConfig.cargoCapacity;
+      case ShipRole.industrial:
+        return activeCraftedShip?.effectiveCargo ?? 240;
+      case ShipRole.combat:
+        return ShipHullCatalog.cargoForCombatClass(activeShipClass);
+    }
+  }
+
+  int get totalCargoUsed {
+    int total = 0;
+    for (final int v in rawCargo.values) {
+      total += v;
+    }
+    for (final int v in refinedCargo.values) {
+      total += v;
+    }
+    return total;
+  }
+
+  int get remainingCargoCapacity => max(0, currentCargoCapacity - totalCargoUsed);
+
+  int skillLevelOf(SkillType skill) =>
+      (pilotSkills[skill] ?? const SkillProgress()).level;
+
+  SkillProgress skillProgressOf(SkillType skill) =>
+      pilotSkills[skill] ?? const SkillProgress();
+
+  int get totalSkillLevels {
+    int sum = 0;
+    for (final SkillType s in SkillType.values) {
+      sum += skillLevelOf(s);
+    }
+    return sum;
+  }
+
   DroneFormationSpec get activeFormationSpec =>
       DroneFormationCatalog.of(activeFormation);
 
@@ -301,44 +453,99 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   bool isInViewport(Vector2 worldPos, {double margin = 120.0}) {
     final Vector2 cam = camera.viewfinder.position;
-    final double halfW = size.x * 0.5 + margin;
-    final double halfH = size.y * 0.5 + margin;
+    final double invZoom = 1.0 / max(0.25, cameraZoom);
+    final double halfW = size.x * 0.5 * invZoom + margin;
+    final double halfH = size.y * 0.5 * invZoom + margin;
     return (worldPos.x - cam.x).abs() <= halfW &&
         (worldPos.y - cam.y).abs() <= halfH;
   }
 
-  // Dynamic Ship Stats (Ship + up to 8 active VANT config gear + Active Drone Formation modifiers)
+  // Dynamic Ship Stats (Capsule / Industrial / Combat + Quality Gear + VANTs + Pilot Skills + Formation)
   double get currentLaserDamage {
+    final double skillMult =
+        1.0 + ((skillLevelOf(SkillType.weaponry) - 1) / 98.0) * 0.20;
+    if (activeShipRole == ShipRole.capsule) {
+      return max(
+        1.0,
+        (GameConstants.playerBaseLaserDamage +
+                CapsulePermanentConfig.permanentLaserDamage) *
+            skillMult,
+      );
+    }
     double sum = GameConstants.playerBaseLaserDamage;
     for (final EquipmentItem? item in laserSlots) {
-      if (item != null) sum += item.spec.damageBonus;
+      if (item != null) sum += item.effectiveDamageBonus;
     }
     for (final VantDrone vant in activeVants) {
       for (final EquipmentItem? item in vant.slotsForConfig(activeConfig)) {
-        if (item != null) sum += item.spec.damageBonus;
+        if (item != null) sum += item.effectiveDamageBonus;
       }
     }
-    return max(1.0, sum * activeFormationSpec.damageMult);
+    return max(1.0, sum * activeFormationSpec.damageMult * skillMult);
   }
 
   double get currentMaxShield {
-    double sum = GameConstants.playerBaseMaxShield;
+    final double skillMult =
+        1.0 + ((skillLevelOf(SkillType.shields) - 1) / 98.0) * 0.20;
+    if (activeShipRole == ShipRole.capsule) {
+      return max(
+        10.0,
+        (CapsulePermanentConfig.baseShield +
+                CapsulePermanentConfig.permanentShieldBonus) *
+            skillMult,
+      );
+    }
+    double sum = activeShipRole == ShipRole.industrial
+        ? (activeCraftedShip?.effectiveShield.toDouble() ?? 140.0)
+        : GameConstants.playerBaseMaxShield;
     for (final EquipmentItem? item in shieldSlots) {
-      if (item != null) sum += item.spec.shieldBonus;
+      if (item != null) sum += item.effectiveShieldBonus;
     }
     for (final VantDrone vant in activeVants) {
       for (final EquipmentItem? item in vant.slotsForConfig(activeConfig)) {
-        if (item != null) sum += item.spec.shieldBonus;
+        if (item != null) sum += item.effectiveShieldBonus;
       }
     }
-    return max(10.0, sum * activeFormationSpec.shieldMult);
+    return max(10.0, sum * activeFormationSpec.shieldMult * skillMult);
   }
 
-  double get currentSpeed => activeShipSpec.speed * activeFormationSpec.speedMult;
+  double get currentSpeed {
+    final double skillMult =
+        1.0 + ((skillLevelOf(SkillType.piloting) - 1) / 98.0) * 0.15;
+    final double baseSpeed;
+    switch (activeShipRole) {
+      case ShipRole.capsule:
+        baseSpeed = CapsulePermanentConfig.speed;
+        break;
+      case ShipRole.industrial:
+        final IndustrialType? ind = activeIndustrialType;
+        baseSpeed = ind != null
+            ? ShipHullCatalog.industrialT1(ind).speed
+            : 220.0;
+        break;
+      case ShipRole.combat:
+        baseSpeed = activeShipSpec.speed;
+        break;
+    }
+    return baseSpeed * activeFormationSpec.speedMult * skillMult;
+  }
 
   double get currentMaxHull {
-    final double base = activeShipSpec.baseHull +
-        (player.level - 1) * GameConstants.playerHpPerLevel;
+    final double base;
+    switch (activeShipRole) {
+      case ShipRole.capsule:
+        base = CapsulePermanentConfig.baseHull +
+            (player.level - 1) * (GameConstants.playerHpPerLevel * 0.5);
+        break;
+      case ShipRole.industrial:
+        base = (activeCraftedShip?.effectiveHull.toDouble() ?? 220.0) +
+            (player.level - 1) * GameConstants.playerHpPerLevel;
+        break;
+      case ShipRole.combat:
+        base = activeShipSpec.baseHull +
+            (player.level - 1) * GameConstants.playerHpPerLevel;
+        break;
+    }
     return max(40.0, base * activeFormationSpec.hullMult);
   }
 
@@ -369,6 +576,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     _populateActiveMapEntities();
 
     camera.viewfinder.anchor = Anchor.center;
+    camera.viewfinder.zoom = cameraZoom;
     camera.follow(player, snap: true);
 
     moveJoystick = JoystickComponent(
@@ -421,9 +629,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     configButton = ConfigButtonComponent();
     formationButton = FormationButtonComponent();
     formationSubmenu = FormationSubmenuComponent();
-    hangarButton = HangarButtonComponent();
     galaxyMapButton = GalaxyMapButtonComponent();
-    autopilotBadge = AutopilotBadgeComponent();
     missionHud = MissionHudComponent();
     minimap = MinimapComponent();
     tacticalHud = TacticalHudComponent();
@@ -437,27 +643,40 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       jumpButton,
       configButton,
       formationButton,
-      hangarButton,
       galaxyMapButton,
-      autopilotBadge,
       missionHud,
       minimap,
       tacticalHud,
       formationSubmenu,
       warpFlashOverlay,
     ]);
+    notifyUi();
   }
 
   void _initStarterState() {
-    credits = 0;
+    credits = 250;
     kills = 0;
     player.level = 1;
     player.xp = 0;
     activeConfig = 1;
+    activeShipRole = ShipRole.capsule;
+    activeCraftedShipId = null;
     ownedShipClasses
       ..clear()
       ..add(ShipClass.interceptor);
     activeShipClass = ShipClass.interceptor;
+    ownedCraftedShips.clear();
+    ownedCraftedItems.clear();
+    _nextCraftedId = 1;
+    lastCraftOutcome = null;
+    basicToolsOwned = 0;
+    pilotSkills
+      ..clear()
+      ..addAll(createDefaultPilotSkills());
+    rawCargo.clear();
+    refinedCargo.clear();
+    playerWrecks.clear();
+    lastDeathSummary = null;
     ownedFormations
       ..clear()
       ..add(DroneFormation.normal);
@@ -524,6 +743,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
             .map((EquipmentItem e) => <String, dynamic>{
                   'id': e.instanceId,
                   'type': e.id.name,
+                  'quality': e.quality.name,
                 })
             .toList(),
         'c1Lasers':
@@ -549,8 +769,33 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         'pilotName': pilotName,
         'companyId': pilotCompanySpec?.id,
         'currentSectorId': currentSectorId,
+        'language': language.code,
+        'activeShipRole': activeShipRole.name,
+        'activeCraftedShipId': activeCraftedShipId,
+        'nextCraftedId': _nextCraftedId,
+        'basicToolsOwned': basicToolsOwned,
+        'ownedCraftedShips': ownedCraftedShips
+            .map((CraftedShipRecord s) => s.toJson())
+            .toList(),
+        'ownedCraftedItems': ownedCraftedItems
+            .map((CraftedItemRecord i) => i.toJson())
+            .toList(),
+        'pilotSkills': <String, dynamic>{
+          for (final MapEntry<SkillType, SkillProgress> e
+              in pilotSkills.entries)
+            e.key.name: <String, int>{'lv': e.value.level, 'xp': e.value.xp},
+        },
+        'rawCargo': <String, int>{
+          for (final MapEntry<ResourceType, int> e in rawCargo.entries)
+            if (e.value > 0) e.key.name: e.value,
+        },
+        'refinedCargo': <String, int>{
+          for (final MapEntry<ResourceType, int> e in refinedCargo.entries)
+            if (e.value > 0) e.key.name: e.value,
+        },
       };
       await prefs.setString(savePrefsKey, jsonEncode(payload));
+      await prefs.setString(languagePrefsKey, language.code);
       if (pilotName != null &&
           pilotName!.trim().length >= 3 &&
           pilotCompanySpec != null) {
@@ -568,6 +813,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   Future<void> _loadSavedGame() async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
+      language = GameLanguageExt.fromCode(prefs.getString(languagePrefsKey));
       final String? savedNamePref = prefs.getString(pilotNamePrefsKey)?.trim();
       final PilotCompany? savedCompanyPref =
           PilotCompanyCatalog.fromId(prefs.getString(companyIdPrefsKey));
@@ -588,6 +834,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       }
 
       final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      if (data['language'] is String) {
+        language = GameLanguageExt.fromCode(data['language'] as String);
+      }
       final String? jsonName = (data['pilotName'] as String?)?.trim();
       final PilotCompany? jsonCompany =
           PilotCompanyCatalog.fromId(data['companyId'] as String?);
@@ -605,6 +854,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         final Map<String, dynamic> m = item as Map<String, dynamic>;
         final int? id = m['id'] as int?;
         final String? typeName = m['type'] as String?;
+        final String? qualityName = m['quality'] as String?;
         if (id == null || typeName == null) continue;
         EquipmentItemId? matched;
         for (final EquipmentItemId e in EquipmentItemId.values) {
@@ -613,8 +863,14 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
             break;
           }
         }
+        final CraftQuality matchedQuality = CraftQuality.values.firstWhere(
+          (CraftQuality q) => q.name == qualityName,
+          orElse: () => CraftQuality.standard,
+        );
         if (matched != null) {
-          parsedItems.add(EquipmentItem(instanceId: id, id: matched));
+          parsedItems.add(
+            EquipmentItem(instanceId: id, id: matched, quality: matchedQuality),
+          );
         }
       }
       if (parsedItems.isEmpty) return;
@@ -831,6 +1087,89 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       }
       activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
       plottedRoute = <String>[];
+
+      // Restore v1.10+ Crafted Ships, Items, Pilot Skills, Cargo & Active Ship Role
+      ownedCraftedShips.clear();
+      final List<dynamic>? rawCraftedShips =
+          data['ownedCraftedShips'] as List<dynamic>?;
+      if (rawCraftedShips != null) {
+        for (final dynamic item in rawCraftedShips) {
+          if (item is Map<String, dynamic>) {
+            final CraftedShipRecord? rec = CraftedShipRecord.fromJson(item);
+            if (rec != null) ownedCraftedShips.add(rec);
+          }
+        }
+      }
+      ownedCraftedItems.clear();
+      final List<dynamic>? rawCraftedItems =
+          data['ownedCraftedItems'] as List<dynamic>?;
+      if (rawCraftedItems != null) {
+        for (final dynamic item in rawCraftedItems) {
+          if (item is Map<String, dynamic>) {
+            final CraftedItemRecord? rec = CraftedItemRecord.fromJson(item);
+            if (rec != null) ownedCraftedItems.add(rec);
+          }
+        }
+      }
+      _nextCraftedId = max(
+        (data['nextCraftedId'] as int?) ?? 1,
+        max(
+              ownedCraftedShips.fold<int>(
+                0,
+                (int m, CraftedShipRecord s) => max(m, s.instanceId),
+              ),
+              ownedCraftedItems.fold<int>(
+                0,
+                (int m, CraftedItemRecord i) => max(m, i.instanceId),
+              ),
+            ) +
+            1,
+      );
+      basicToolsOwned = max(0, (data['basicToolsOwned'] as int?) ?? 0);
+
+      final Map<String, dynamic>? rawSkills =
+          data['pilotSkills'] as Map<String, dynamic>?;
+      if (rawSkills != null) {
+        for (final SkillType s in SkillType.values) {
+          final dynamic entry = rawSkills[s.name];
+          if (entry is Map<String, dynamic>) {
+            final int lv = ((entry['lv'] as num?)?.toInt() ?? 1)
+                .clamp(kPilotSkillMinLevel, kPilotSkillMaxLevel);
+            final int sxp = max(0, (entry['xp'] as num?)?.toInt() ?? 0);
+            pilotSkills[s] = SkillProgress(level: lv, xp: sxp);
+          }
+        }
+      }
+
+      rawCargo.clear();
+      final Map<String, dynamic>? savedRaw =
+          data['rawCargo'] as Map<String, dynamic>?;
+      if (savedRaw != null) {
+        for (final ResourceType r in ResourceType.values) {
+          final int qty = (savedRaw[r.name] as num?)?.toInt() ?? 0;
+          if (qty > 0) rawCargo[r] = qty;
+        }
+      }
+      refinedCargo.clear();
+      final Map<String, dynamic>? savedRef =
+          data['refinedCargo'] as Map<String, dynamic>?;
+      if (savedRef != null) {
+        for (final ResourceType r in ResourceType.values) {
+          final int qty = (savedRef[r.name] as num?)?.toInt() ?? 0;
+          if (qty > 0) refinedCargo[r] = qty;
+        }
+      }
+
+      final String? savedRole = data['activeShipRole'] as String?;
+      activeShipRole = ShipRole.values.firstWhere(
+        (ShipRole r) => r.name == savedRole,
+        orElse: () => ShipRole.capsule,
+      );
+      activeCraftedShipId = data['activeCraftedShipId'] as int?;
+      if (activeShipRole == ShipRole.industrial && activeCraftedShip == null) {
+        activeShipRole = ShipRole.capsule;
+        activeCraftedShipId = null;
+      }
     } catch (_) {
       // Keep starter state on corrupt save
     }
@@ -847,6 +1186,11 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
     pilotName = null;
     pilotCompany = null;
+    isAdminMode = false;
+    adminBannerText = null;
+    adminBannerTimer = 0.0;
+    cameraZoom = kCameraZoomDefault;
+    camera.viewfinder.zoom = cameraZoom;
     _initStarterState();
     currentSectorId = GalaxyMapGraph.defaultSectorId;
     activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
@@ -866,10 +1210,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     _populateActiveMapEntities();
     _snapVantsToFormation();
     camera.follow(player, snap: true);
-    overlays.remove(hangarOverlayId);
-    overlays.remove(tacticalMapOverlayId);
-    overlays.remove(galaxyMapOverlayId);
+    closeAllModalOverlays();
     resumeEngine();
+    notifyUi();
     onResetToIntro?.call();
   }
 
@@ -882,6 +1225,10 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       b.removeFromParent();
     }
     lootBoxes.clear();
+    resourceNodes.clear();
+    alienWrecks.clear();
+    activeMiningNode = null;
+    activeSalvageWreck = null;
     for (final Component child in List<Component>.of(world.children)) {
       if (child is LaserBoltComponent ||
           child is HomingRocketComponent ||
@@ -893,15 +1240,107 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
   }
 
-  void _populateActiveMapEntities() {
+  void _buildActiveSectorStations() {
     final SectorNode sector = currentSector;
-    // Capital Cities (C1, C2, C3) are full Safe Zones (Base, Market, Vault) with zero hostile aliens
+    final Vector2 c = activeSafeZoneCenter;
+    if (sector.isCapitalCity) {
+      activeStations = <SectorStation>[
+        SectorStation(
+          kind: StationKind.refinery,
+          sectorId: sector.id,
+          name: '${sector.id} REFINERY',
+          worldX: c.x - 210.0,
+          worldY: c.y - 110.0,
+          accentColor: const Color(0xFFFB923C),
+        ),
+        SectorStation(
+          kind: StationKind.crafting,
+          sectorId: sector.id,
+          name: '${sector.id} CRAFTING',
+          worldX: c.x + 210.0,
+          worldY: c.y - 110.0,
+          accentColor: const Color(0xFF34D399),
+        ),
+        SectorStation(
+          kind: StationKind.localMarket,
+          sectorId: sector.id,
+          name: '${sector.id} MARKET',
+          worldX: c.x,
+          worldY: c.y + 185.0,
+          accentColor: const Color(0xFFFACC15),
+        ),
+      ];
+    } else if (sector.isNucleus) {
+      activeStations = <SectorStation>[
+        SectorStation(
+          kind: StationKind.localMarket,
+          sectorId: sector.id,
+          name: '0-0 BLACK MARKET',
+          worldX: c.x,
+          worldY: c.y + 140.0,
+          accentColor: const Color(0xFFFACC15),
+        ),
+      ];
+    } else {
+      activeStations = <SectorStation>[];
+    }
+  }
+
+  String _regionCityForSector(SectorNode sector) {
+    final String id = sector.id;
+    if (id == '0-0' || id.startsWith('Y')) return '0-0';
+    if (id.startsWith('C1') || id.startsWith('1-') || id.startsWith('R1')) {
+      return 'C1';
+    }
+    if (id.startsWith('C2') || id.startsWith('2-') || id.startsWith('R2')) {
+      return 'C2';
+    }
+    if (id.startsWith('C3') || id.startsWith('3-') || id.startsWith('R3')) {
+      return 'C3';
+    }
+    return 'C1';
+  }
+
+  void _spawnResourceNodesForSector(SectorNode sector) {
+    if (sector.isEntireSectorSafe) return;
+    final String region = _regionCityForSector(sector);
+    final int count = sector.isNucleus ? 26 : 18;
+    for (int i = 0; i < count; i++) {
+      final int nodeTier = (i % 2 == 0) ? 1 : 2;
+      final ResourceType resType =
+          ResourceCatalog.forRegionAndTier(region, nodeTier);
+      final Vector2 pos = randomPointInActiveSector(
+        margin: 340.0,
+        safeZoneBuffer: 260.0,
+      );
+      final int maxCh = 4 + rng.nextInt(2); // 4-5 charges
+      resourceNodes.add(
+        ResourceNodeEntity(
+          id: _nextWorldEntityId++,
+          resourceType: resType,
+          x: pos.x,
+          y: pos.y,
+          radius: resType == ResourceType.yellowCrystal ? 28.0 : 22.0,
+          rotationRad: rng.nextDouble() * 2.0 * pi,
+          pulsePhase: rng.nextDouble() * 2.0 * pi,
+          maxCharges: maxCh,
+        ),
+      );
+    }
+  }
+
+  void _populateActiveMapEntities() {
+    _buildActiveSectorStations();
+    final SectorNode sector = currentSector;
+    // Capital Cities (C1, C2, C3) are full Safe Zones (Base, Market, Refinery, Crafting) with zero hostile aliens
     if (sector.isEntireSectorSafe) {
       for (int i = 0; i < 16; i++) {
         spawnBonusBox();
       }
       return;
     }
+
+    _spawnResourceNodesForSector(sector);
 
     switch (sector.zoneType) {
       case ZoneType.capitalCity:
@@ -1051,12 +1490,36 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       ),
     );
     spawnFloatingText(
-      position: player.position + Vector2(0.0, -activeShipSpec.hullRadius - 32.0),
+      position: player.position + Vector2(0.0, -activeHullRadius - 32.0),
       text: 'SECTOR ${dest.id} • ${dest.zoneType.shortLabel}',
       color: dest.nodeColor,
       fontSize: 14.5,
     );
+    notifyUi();
   }
+
+  SectorStation? get nearestStation {
+    if (activeStations.isEmpty) return null;
+    SectorStation? closest;
+    double bestDist = double.infinity;
+    for (final SectorStation st in activeStations) {
+      final double d =
+          hypot(player.position.x - st.worldX, player.position.y - st.worldY);
+      if (d < bestDist) {
+        bestDist = d;
+        closest = st;
+      }
+    }
+    if (closest == null) return null;
+    if (bestDist <= closest.interactRadius ||
+        currentSector.isCapitalCity ||
+        (currentSector.isNucleus && player.inSafeZone)) {
+      return closest;
+    }
+    return null;
+  }
+
+  double hypot(double dx, double dy) => sqrt(dx * dx + dy * dy);
 
   @override
   void update(double dt) {
@@ -1068,6 +1531,16 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     if (warpFlashTimer > 0.0) {
       warpFlashTimer = max(0.0, warpFlashTimer - dt);
     }
+    if (_combatMiningWarnCooldown > 0.0) {
+      _combatMiningWarnCooldown = max(0.0, _combatMiningWarnCooldown - dt);
+    }
+    if (adminBannerTimer > 0.0) {
+      adminBannerTimer = max(0.0, adminBannerTimer - dt);
+      if (adminBannerTimer <= 0.0) {
+        adminBannerText = null;
+        notifyUi();
+      }
+    }
 
     if (aimJoystick.relativeDelta.length > 0.12) {
       final double aimAngle = atan2(
@@ -1077,15 +1550,461 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       _lockClosestAlienInRadarCone(aimAngle);
     }
 
+    _updateExtractionAndWrecks(dt);
     _updateVantFormationPositions(dt);
+
+    _uiHudTickAccum += dt;
+    if (_uiHudTickAccum >= 0.2) {
+      _uiHudTickAccum = 0.0;
+      if (activeStations.isNotEmpty ||
+          activeMiningNode != null ||
+          activeSalvageWreck != null ||
+          adminBannerTimer > 0.0) {
+        notifyUi();
+      }
+    }
+  }
+
+  void _updateExtractionAndWrecks(double dt) {
+    // 1. Update & expire alien wrecks
+    for (final AlienWreckEntity wreck in List<AlienWreckEntity>.of(alienWrecks)) {
+      wreck.expirationTimerSec -= dt;
+      wreck.pulsePhase += dt * 3.0;
+      if (wreck.isDepleted) {
+        if (activeSalvageWreck == wreck) activeSalvageWreck = null;
+        alienWrecks.remove(wreck);
+      }
+    }
+
+    // 2. Update & auto-recover player ship wrecks in current sector
+    for (final PlayerShipWreck wreck
+        in List<PlayerShipWreck>.of(playerWrecks)) {
+      wreck.expirationTimerSec -= dt;
+      if (wreck.expirationTimerSec <= 0.0 || wreck.isEmpty) {
+        playerWrecks.remove(wreck);
+        continue;
+      }
+      if (wreck.sectorId != currentSectorId) continue;
+      final double dist =
+          hypot(player.position.x - wreck.x, player.position.y - wreck.y);
+      if (dist <= 85.0) {
+        int recoveredUnits = 0;
+        for (final ResourceType res in List<ResourceType>.of(wreck.rawCargo.keys)) {
+          final int avail = wreck.rawCargo[res] ?? 0;
+          if (avail <= 0) continue;
+          final int take = min(avail, remainingCargoCapacity);
+          if (take > 0) {
+            rawCargo[res] = (rawCargo[res] ?? 0) + take;
+            wreck.rawCargo[res] = avail - take;
+            recoveredUnits += take;
+          }
+        }
+        for (final ResourceType res
+            in List<ResourceType>.of(wreck.refinedCargo.keys)) {
+          final int avail = wreck.refinedCargo[res] ?? 0;
+          if (avail <= 0) continue;
+          final int take = min(avail, remainingCargoCapacity);
+          if (take > 0) {
+            refinedCargo[res] = (refinedCargo[res] ?? 0) + take;
+            wreck.refinedCargo[res] = avail - take;
+            recoveredUnits += take;
+          }
+        }
+        int recoveredGear = 0;
+        if (wreck.droppedEquipment.isNotEmpty) {
+          ownedItems.addAll(wreck.droppedEquipment);
+          recoveredGear = wreck.droppedEquipment.length;
+          wreck.droppedEquipment.clear();
+        }
+        if (recoveredUnits > 0 || recoveredGear > 0) {
+          spawnFloatingText(
+            position: player.position + Vector2(0.0, -activeHullRadius - 26.0),
+            text:
+                '${GameStrings.t(language, 'WRECK RECOVERED', 'PECIO RECUPERADO')} +$recoveredUnits${recoveredGear > 0 ? ' • +$recoveredGear GEAR' : ''}',
+            color: const Color(0xFF4ADE80),
+            fontSize: 13.5,
+          );
+          if (wreck.isEmpty) {
+            playerWrecks.remove(wreck);
+          }
+          saveGame();
+          notifyUi();
+        }
+      }
+    }
+
+    // 3. Auto-detect nearby Alien Wreck or Resource Node for extraction when within range
+    const double extractRange = 155.0;
+    if (autoFireEnabled || player.inSafeZone) {
+      activeMiningNode = null;
+      activeSalvageWreck = null;
+      return;
+    }
+
+    // Salvaging Alien Wrecks (all ship roles can salvage)
+    if (activeSalvageWreck != null) {
+      final AlienWreckEntity w = activeSalvageWreck!;
+      if (w.isDepleted ||
+          hypot(player.position.x - w.x, player.position.y - w.y) >
+              extractRange + 25.0) {
+        w.salvageProgress = 0.0;
+        activeSalvageWreck = null;
+      }
+    }
+    if (activeSalvageWreck == null) {
+      for (final AlienWreckEntity w in alienWrecks) {
+        if (hypot(player.position.x - w.x, player.position.y - w.y) <=
+            extractRange) {
+          activeSalvageWreck = w;
+          break;
+        }
+      }
+    }
+    if (activeSalvageWreck != null) {
+      final AlienWreckEntity w = activeSalvageWreck!;
+      final double secPerCharge =
+          baseExtractionSeconds(skillLevelOf(SkillType.salvaging));
+      w.salvageProgress += dt / max(0.1, secPerCharge);
+      if (w.salvageProgress >= 1.0) {
+        w.salvageProgress = 0.0;
+        if (remainingCargoCapacity > 0) {
+          rawCargo[ResourceType.xenoSalvage] =
+              (rawCargo[ResourceType.xenoSalvage] ?? 0) + 1;
+          final bool coreDrop =
+              rng.nextDouble() < (w.fromBoss ? 0.35 : 0.15) &&
+                  remainingCargoCapacity > 0;
+          if (coreDrop) {
+            rawCargo[ResourceType.xenoCore] =
+                (rawCargo[ResourceType.xenoCore] ?? 0) + 1;
+          }
+          w.charges -= 1;
+          addSkillXp(SkillType.salvaging, w.fromBoss ? 65 : 35);
+          spawnFloatingText(
+            position: Vector2(w.x, w.y - w.radius - 14.0),
+            text: coreDrop
+                ? '+1 ${GameStrings.resourceName(ResourceType.xenoSalvage, language)} +1 CORE!'
+                : '+1 ${GameStrings.resourceName(ResourceType.xenoSalvage, language)}',
+            color: const Color(0xFFC084FC),
+            fontSize: 12.5,
+          );
+          if (w.isDepleted) {
+            alienWrecks.remove(w);
+            activeSalvageWreck = null;
+          }
+          saveGame();
+          notifyUi();
+        } else {
+          spawnFloatingText(
+            position: player.position + Vector2(0.0, -activeHullRadius - 24.0),
+            text: GameStrings.t(language, 'CARGO FULL', 'BODEGA LLENA'),
+            color: const Color(0xFFFBBF24),
+            fontSize: 12.5,
+          );
+          activeSalvageWreck = null;
+        }
+      }
+      return;
+    }
+
+    // Mining Resource Nodes by Charges (Capsule & Industrial ships only)
+    if (activeMiningNode != null) {
+      final ResourceNodeEntity n = activeMiningNode!;
+      if (n.isDepleted ||
+          hypot(player.position.x - n.x, player.position.y - n.y) >
+              extractRange + 25.0) {
+        n.harvestProgress = 0.0;
+        activeMiningNode = null;
+      }
+    }
+    if (activeMiningNode == null) {
+      for (final ResourceNodeEntity n in resourceNodes) {
+        if (hypot(player.position.x - n.x, player.position.y - n.y) <=
+            extractRange) {
+          if (activeShipRole == ShipRole.combat) {
+            if (_combatMiningWarnCooldown <= 0.0) {
+              _combatMiningWarnCooldown = 3.5;
+              spawnFloatingText(
+                position:
+                    player.position + Vector2(0.0, -activeHullRadius - 26.0),
+                text: GameStrings.t(
+                  language,
+                  'Combat ships cannot mine (Use Capsule/Industrial)',
+                  'Naves de combate no minan (Usa Cápsula/Industrial)',
+                ),
+                color: const Color(0xFFFBBF24),
+                fontSize: 12.0,
+              );
+            }
+            break;
+          }
+          activeMiningNode = n;
+          break;
+        }
+      }
+    }
+    if (activeMiningNode != null) {
+      if (activeShipRole == ShipRole.combat) {
+        activeMiningNode = null;
+        return;
+      }
+      final ResourceNodeEntity n = activeMiningNode!;
+      final ResourceSpec spec = ResourceCatalog.of(n.resourceType);
+      final double secPerCharge = effectiveExtractionSeconds(
+        skillLevel: skillLevelOf(SkillType.mining),
+        category: spec.category,
+        shipRole: activeShipRole,
+        industrialType: activeIndustrialType,
+      );
+      n.harvestProgress += dt / max(0.1, secPerCharge);
+      if (n.harvestProgress >= 1.0) {
+        n.harvestProgress = 0.0;
+        if (remainingCargoCapacity > 0) {
+          rawCargo[n.resourceType] = (rawCargo[n.resourceType] ?? 0) + 1;
+          n.charges -= 1;
+          addSkillXp(
+            SkillType.mining,
+            spec.isYellowCrystal ? 85 : (spec.tier >= 2 ? 42 : 28),
+          );
+          spawnFloatingText(
+            position: Vector2(n.x, n.y - n.radius - 14.0),
+            text: '+1 ${GameStrings.resourceName(n.resourceType, language)}',
+            color: spec.color,
+            fontSize: 12.5,
+          );
+          if (n.isDepleted) {
+            resourceNodes.remove(n);
+            activeMiningNode = null;
+          }
+          saveGame();
+          notifyUi();
+        } else {
+          spawnFloatingText(
+            position: player.position + Vector2(0.0, -activeHullRadius - 24.0),
+            text: GameStrings.t(language, 'CARGO FULL', 'BODEGA LLENA'),
+            color: const Color(0xFFFBBF24),
+            fontSize: 12.5,
+          );
+          activeMiningNode = null;
+        }
+      }
+    }
+  }
+
+  void addSkillXp(SkillType skill, int amount) {
+    if (amount <= 0) return;
+    final SkillProgress before = skillProgressOf(skill);
+    final SkillProgress after = before.addXp(amount);
+    pilotSkills[skill] = after;
+    if (after.level > before.level) {
+      spawnFloatingText(
+        position: player.position + Vector2(0.0, -activeHullRadius - 42.0),
+        text:
+            '${GameStrings.skillName(skill, language).toUpperCase()} LV ${after.level}!',
+        color: skill.accentColor,
+        fontSize: 14.5,
+      );
+      _syncPlayerVitalsToStats();
+    }
+  }
+
+  void setLanguage(GameLanguage lang) {
+    if (language == lang) return;
+    language = lang;
+    saveGame();
+    notifyUi();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Admin / Debug Mode (Free Testing) & Pinch-to-Zoom Camera
+  // ---------------------------------------------------------------------------
+  void toggleAdminMode() {
+    isAdminMode = !isAdminMode;
+    if (isAdminMode) {
+      adminBannerText = GameStrings.adminActiveBanner(language);
+      adminBannerTimer = 3.2;
+    } else {
+      adminBannerText = null;
+      adminBannerTimer = 0.0;
+    }
+    notifyUi();
+  }
+
+  void adminSetSkillLevel(SkillType skill, int targetLevel) {
+    if (!isAdminMode) return;
+    final int clamped =
+        targetLevel.clamp(kPilotSkillMinLevel, kPilotSkillMaxLevel);
+    pilotSkills[skill] = SkillProgress(level: clamped, xp: 0);
+    _syncPlayerVitalsToStats();
+    saveGame();
+    notifyUi();
+  }
+
+  void adminCycleSkillLevel(SkillType skill) {
+    if (!isAdminMode) return;
+    final int cur = skillLevelOf(skill);
+    final int next = cur < 33
+        ? 33
+        : (cur < 66 ? 66 : (cur < 99 ? 99 : 1));
+    adminSetSkillLevel(skill, next);
+  }
+
+  void adminSetAllSkillsLevel(int targetLevel) {
+    if (!isAdminMode) return;
+    final int clamped =
+        targetLevel.clamp(kPilotSkillMinLevel, kPilotSkillMaxLevel);
+    for (final SkillType s in SkillType.values) {
+      pilotSkills[s] = SkillProgress(level: clamped, xp: 0);
+    }
+    _syncPlayerVitalsToStats();
+    saveGame();
+    notifyUi();
+  }
+
+  void setCameraZoom(double zoom) {
+    final double clamped = zoom.clamp(kCameraZoomMin, kCameraZoomMax);
+    if ((clamped - cameraZoom).abs() < 0.002) return;
+    cameraZoom = clamped;
+    camera.viewfinder.zoom = cameraZoom;
+    notifyUi();
+  }
+
+  void resetCameraZoom() {
+    setCameraZoom(kCameraZoomDefault);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Overlay Management (Unified Menu, Skills, Hangar, Inventory, Guide, Settings, Station, Death)
+  // ---------------------------------------------------------------------------
+  void closeAllModalOverlays() {
+    overlays.remove(hangarOverlayId);
+    overlays.remove(tacticalMapOverlayId);
+    overlays.remove(galaxyMapOverlayId);
+    overlays.remove(menuOverlayId);
+    overlays.remove(skillsOverlayId);
+    overlays.remove(inventoryOverlayId);
+    overlays.remove(guideOverlayId);
+    overlays.remove(settingsOverlayId);
+    overlays.remove(stationOverlayId);
+    overlays.remove(deathOverlayId);
+    notifyUi();
+  }
+
+  void openMenu() {
+    isFormationMenuOpen = false;
+    closeAllModalOverlays();
+    pauseEngine();
+    overlays.add(menuOverlayId);
+    notifyUi();
+  }
+
+  void closeMenu() {
+    overlays.remove(menuOverlayId);
+    resumeEngine();
+    notifyUi();
+  }
+
+  void openSkills() {
+    isFormationMenuOpen = false;
+    closeAllModalOverlays();
+    pauseEngine();
+    overlays.add(skillsOverlayId);
+    notifyUi();
+  }
+
+  void closeSkills() {
+    overlays.remove(skillsOverlayId);
+    resumeEngine();
+    notifyUi();
+  }
+
+  void openInventory() {
+    isFormationMenuOpen = false;
+    closeAllModalOverlays();
+    pauseEngine();
+    overlays.add(inventoryOverlayId);
+    notifyUi();
+  }
+
+  void closeInventory() {
+    overlays.remove(inventoryOverlayId);
+    resumeEngine();
+    notifyUi();
+  }
+
+  void openGuide() {
+    isFormationMenuOpen = false;
+    closeAllModalOverlays();
+    pauseEngine();
+    overlays.add(guideOverlayId);
+    notifyUi();
+  }
+
+  void closeGuide() {
+    overlays.remove(guideOverlayId);
+    resumeEngine();
+    notifyUi();
+  }
+
+  void openSettings() {
+    isFormationMenuOpen = false;
+    closeAllModalOverlays();
+    pauseEngine();
+    overlays.add(settingsOverlayId);
+    notifyUi();
+  }
+
+  void closeSettings() {
+    overlays.remove(settingsOverlayId);
+    resumeEngine();
+    notifyUi();
+  }
+
+  void openStation({StationKind? initialTab}) {
+    final SectorStation? st = nearestStation;
+    if (st == null && !currentSector.isCapitalCity && !currentSector.isNucleus) {
+      return;
+    }
+    isFormationMenuOpen = false;
+    closeAllModalOverlays();
+    if (currentSector.isNucleus) {
+      openStationTab = StationKind.localMarket;
+    } else {
+      openStationTab = initialTab ?? st?.kind ?? StationKind.refinery;
+    }
+    lastCraftOutcome = null;
+    pauseEngine();
+    overlays.add(stationOverlayId);
+    notifyUi();
+  }
+
+  void closeStation() {
+    overlays.remove(stationOverlayId);
+    lastCraftOutcome = null;
+    _syncPlayerVitalsToStats();
+    saveGame();
+    resumeEngine();
+    notifyUi();
+  }
+
+  void switchStationTab(StationKind tab) {
+    if (currentSector.isNucleus && tab != StationKind.localMarket) return;
+    openStationTab = tab;
+    notifyUi();
+  }
+
+  void dismissDeathOverlay() {
+    overlays.remove(deathOverlayId);
+    lastDeathSummary = null;
+    resumeEngine();
+    notifyUi();
   }
 
   void openHangar() {
     isFormationMenuOpen = false;
-    overlays.remove(tacticalMapOverlayId);
-    overlays.remove(galaxyMapOverlayId);
+    closeAllModalOverlays();
     pauseEngine();
     overlays.add(hangarOverlayId);
+    notifyUi();
   }
 
   void closeHangar() {
@@ -1093,17 +2012,24 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     saveGame();
     overlays.remove(hangarOverlayId);
     resumeEngine();
+    notifyUi();
   }
 
   void openTacticalMap() {
-    if (overlays.isActive(hangarOverlayId)) return;
+    if (overlays.isActive(hangarOverlayId) ||
+        overlays.isActive(stationOverlayId) ||
+        overlays.isActive(menuOverlayId)) {
+      return;
+    }
     isFormationMenuOpen = false;
     overlays.remove(galaxyMapOverlayId);
     overlays.add(tacticalMapOverlayId);
+    notifyUi();
   }
 
   void closeTacticalMap() {
     overlays.remove(tacticalMapOverlayId);
+    notifyUi();
   }
 
   void toggleTacticalMap() {
@@ -1115,14 +2041,20 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   }
 
   void openGalaxyMap() {
-    if (overlays.isActive(hangarOverlayId)) return;
+    if (overlays.isActive(hangarOverlayId) ||
+        overlays.isActive(stationOverlayId) ||
+        overlays.isActive(menuOverlayId)) {
+      return;
+    }
     isFormationMenuOpen = false;
     overlays.remove(tacticalMapOverlayId);
     overlays.add(galaxyMapOverlayId);
+    notifyUi();
   }
 
   void closeGalaxyMap() {
     overlays.remove(galaxyMapOverlayId);
+    notifyUi();
   }
 
   void toggleGalaxyMap() {
@@ -1133,12 +2065,583 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Permanent Capsule, Industrial Fleet & Combat Ship Switching
+  // ---------------------------------------------------------------------------
+  bool get canSwapShipsHere => player.inSafeZone || isAdminMode;
+
+  bool selectCapsule() {
+    if (!canSwapShipsHere) return false;
+    if (activeShipRole == ShipRole.capsule) return false;
+    activeShipRole = ShipRole.capsule;
+    activeCraftedShipId = null;
+    activeMiningNode = null;
+    _syncPlayerVitalsToStats();
+    player.hp = currentMaxHull;
+    player.shield = currentMaxShield;
+    saveGame();
+    notifyUi();
+    return true;
+  }
+
+  bool selectCraftedShip(int instanceId) {
+    if (!canSwapShipsHere) return false;
+    CraftedShipRecord? target;
+    for (final CraftedShipRecord s in ownedCraftedShips) {
+      if (s.instanceId == instanceId) {
+        target = s;
+        break;
+      }
+    }
+    if (target == null) return false;
+    activeShipRole = ShipRole.industrial;
+    activeCraftedShipId = target.instanceId;
+    activeMiningNode = null;
+    _syncPlayerVitalsToStats();
+    player.hp = currentMaxHull;
+    player.shield = currentMaxShield;
+    saveGame();
+    notifyUi();
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Clockwise Refinery, Station Crafting (Qualities), Local Market & Basic Vendor
+  // ---------------------------------------------------------------------------
+  int refineResource(ResourceType res, int requestedUnits) {
+    if (requestedUnits <= 0) return 0;
+    final ResourceSpec spec = ResourceCatalog.of(res);
+    if (!spec.isRefinable) return 0;
+    if (!isAdminMode && !spec.canRefineIn(currentSectorId)) return 0;
+
+    final int refiningLv = skillLevelOf(SkillType.refining);
+    final int feePerUnit =
+        isAdminMode ? 0 : spec.effectiveRefiningFeePerUnit(refiningLv);
+    final int maxUnits;
+    if (isAdminMode) {
+      maxUnits = requestedUnits;
+    } else {
+      final int ownedRaw = rawCargo[res] ?? 0;
+      final int byRaw = ownedRaw ~/ ResourceCatalog.rawRequiredPerRefine;
+      final int byCredits = feePerUnit > 0 ? (credits ~/ feePerUnit) : byRaw;
+      maxUnits = min(requestedUnits, min(byRaw, byCredits));
+    }
+    if (maxUnits <= 0) return 0;
+
+    if (!isAdminMode) {
+      final int consumedRaw = maxUnits * ResourceCatalog.rawRequiredPerRefine;
+      final int remainingRaw = max(0, (rawCargo[res] ?? 0) - consumedRaw);
+      if (remainingRaw == 0) {
+        rawCargo.remove(res);
+      } else {
+        rawCargo[res] = remainingRaw;
+      }
+      credits = max(0, credits - maxUnits * feePerUnit);
+    }
+
+    int bonusUnits = 0;
+    final double bonusChance = refiningBonusOutputChance(refiningLv);
+    for (int i = 0; i < maxUnits; i++) {
+      if (rng.nextDouble() < bonusChance) bonusUnits++;
+    }
+    final int produced = maxUnits + bonusUnits;
+    refinedCargo[res] = (refinedCargo[res] ?? 0) + produced;
+    addSkillXp(SkillType.refining, maxUnits * spec.refiningXpPerUnit);
+    saveGame();
+    notifyUi();
+    return produced;
+  }
+
+  bool canCraftRecipe(StationCraftRecipeId recipeId) {
+    if (isAdminMode) return true;
+    final StationCraftRecipeSpec spec = StationCraftCatalog.of(recipeId);
+    for (final CraftMaterialCost cost in spec.ingredients) {
+      final int have = cost.isRefined
+          ? (refinedCargo[cost.resource] ?? 0)
+          : (rawCargo[cost.resource] ?? 0);
+      if (have < cost.amount) return false;
+    }
+    return true;
+  }
+
+  CraftOutcome? craftStationRecipe(StationCraftRecipeId recipeId) {
+    if (!canCraftRecipe(recipeId)) return null;
+    final StationCraftRecipeSpec spec = StationCraftCatalog.of(recipeId);
+    final SkillType skill = spec.discipline.skill;
+    final int skillLv = skillLevelOf(skill);
+
+    int refundedUnits = 0;
+    if (!isAdminMode) {
+      final double refundRate =
+          spec.discipline == CraftingDiscipline.synthesis
+              ? 0.0
+              : craftingMaterialReturnRate(skillLv);
+      for (final CraftMaterialCost cost in spec.ingredients) {
+        final Map<ResourceType, int> pool =
+            cost.isRefined ? refinedCargo : rawCargo;
+        int refund = 0;
+        if (refundRate > 0.0) {
+          for (int i = 0; i < cost.amount; i++) {
+            if (rng.nextDouble() < refundRate) refund++;
+          }
+        }
+        refundedUnits += refund;
+        final int netConsume = max(0, cost.amount - refund);
+        final int nextVal = max(0, (pool[cost.resource] ?? 0) - netConsume);
+        if (nextVal == 0) {
+          pool.remove(cost.resource);
+        } else {
+          pool[cost.resource] = nextVal;
+        }
+      }
+    }
+
+    final CraftQuality rolledQuality = rollCraftQuality(skillLv, rng);
+    bool doubled = false;
+    int qtyCrafted = 1;
+    if (spec.discipline == CraftingDiscipline.synthesis &&
+        rng.nextDouble() < synthesisDoubleOutputChance(skillLv)) {
+      doubled = true;
+      qtyCrafted = 2;
+    }
+
+    switch (spec.outputKind) {
+      case CraftOutputKind.industrialShip:
+        final ShipHullDefinition hull = spec.shipHullDefinition ??
+            ShipHullCatalog.industrialT1(
+              spec.industrialType ?? IndustrialType.miner,
+            );
+        ownedCraftedShips.add(
+          CraftedShipRecord(
+            instanceId: _nextCraftedId++,
+            recipeId: recipeId,
+            hullId: hull.id,
+            industrialType: spec.industrialType ?? IndustrialType.miner,
+            quality: rolledQuality,
+            effectiveHull: rolledQuality.applyBonusInt(hull.baseHull.round()),
+            effectiveShield:
+                rolledQuality.applyBonusInt(hull.baseShield.round()),
+            effectiveCargo: rolledQuality.applyBonusInt(hull.baseCargo),
+          ),
+        );
+        break;
+      case CraftOutputKind.equipmentGear:
+        final EquipmentItemId eqId =
+            spec.resultEquipmentId ?? EquipmentItemId.lf2;
+        ownedItems.add(
+          EquipmentItem(
+            instanceId: _nextItemInstanceId++,
+            id: eqId,
+            quality: rolledQuality,
+          ),
+        );
+        break;
+      case CraftOutputKind.extractionTool:
+      case CraftOutputKind.consumableRepair:
+      case CraftOutputKind.consumableBooster:
+        ownedCraftedItems.add(
+          CraftedItemRecord(
+            instanceId: _nextCraftedId++,
+            recipeId: recipeId,
+            quality: rolledQuality,
+            effectivePrimaryStat:
+                rolledQuality.applyBonus(spec.basePrimaryStat),
+            effectiveDurationMinutes:
+                rolledQuality.applyBonusInt(spec.baseDurationMinutes),
+            quantity: qtyCrafted,
+          ),
+        );
+        break;
+    }
+
+    addSkillXp(skill, spec.xpReward);
+    final CraftOutcome outcome = CraftOutcome(
+      id: _nextCraftOutcomeId++,
+      recipeId: recipeId,
+      quality: rolledQuality,
+      quantityCrafted: qtyCrafted,
+      refundedUnits: refundedUnits,
+      xpAwarded: spec.xpReward,
+      doubledOutput: doubled,
+      statSummary: GameStrings.craftOutcomeStatSummary(
+        spec,
+        rolledQuality,
+        language,
+      ),
+    );
+    lastCraftOutcome = outcome;
+    saveGame();
+    notifyUi();
+    return outcome;
+  }
+
+  bool useCraftedConsumable(int instanceId) {
+    for (int i = 0; i < ownedCraftedItems.length; i++) {
+      final CraftedItemRecord rec = ownedCraftedItems[i];
+      if (rec.instanceId != instanceId) continue;
+      final StationCraftRecipeSpec spec = StationCraftCatalog.of(rec.recipeId);
+      if (spec.outputKind != CraftOutputKind.consumableRepair &&
+          spec.outputKind != CraftOutputKind.consumableBooster) {
+        return false;
+      }
+      if (spec.outputKind == CraftOutputKind.consumableRepair) {
+        player.hp = min(currentMaxHull, player.hp + rec.effectivePrimaryStat);
+        player.shield =
+            min(currentMaxShield, player.shield + rec.effectivePrimaryStat);
+      }
+      rec.quantity -= 1;
+      if (rec.quantity <= 0) {
+        ownedCraftedItems.removeAt(i);
+      }
+      saveGame();
+      notifyUi();
+      return true;
+    }
+    return false;
+  }
+
+  LocalMarketState getOrCreateLocalMarket(String sectorId) {
+    return _localMarkets.putIfAbsent(sectorId, () {
+      final bool isBlack = sectorId == '0-0';
+      final List<MarketResourceListing> resources = <MarketResourceListing>[];
+      for (final ResourceType res in ResourceType.values) {
+        final ResourceSpec spec = ResourceCatalog.of(res);
+        final bool isNative = spec.nativeSectorId == sectorId;
+        final bool canRefineHere = spec.canRefineIn(sectorId);
+        final double mult = isBlack
+            ? 1.35
+            : (canRefineHere ? 1.18 : (isNative ? 0.90 : 1.05));
+        final int rawSell = max(10, (spec.rawBasePrice * mult).round());
+        final int rawBuy = max(rawSell + 8, (rawSell * 1.25).round());
+        resources.add(
+          MarketResourceListing(
+            resourceType: res,
+            isRefined: false,
+            buyPrice: rawBuy,
+            sellPrice: rawSell,
+            localStock: isNative ? 45 : (isBlack ? 18 : 16),
+          ),
+        );
+        if (spec.isRefinable) {
+          final int refSell = max(25, (spec.refinedBasePrice * mult).round());
+          final int refBuy = max(refSell + 15, (refSell * 1.25).round());
+          resources.add(
+            MarketResourceListing(
+              resourceType: res,
+              isRefined: true,
+              buyPrice: refBuy,
+              sellPrice: refSell,
+              localStock: canRefineHere ? 28 : 10,
+            ),
+          );
+        }
+      }
+      final List<MarketEquipmentListing> eq = isBlack
+          ? <MarketEquipmentListing>[
+              MarketEquipmentListing(
+                itemId: EquipmentItemId.lf3,
+                buyPrice: 2200,
+                localStock: 4,
+              ),
+              MarketEquipmentListing(
+                itemId: EquipmentItemId.sg3,
+                buyPrice: 2400,
+                localStock: 4,
+              ),
+              MarketEquipmentListing(
+                itemId: EquipmentItemId.chip3,
+                buyPrice: 1800,
+                localStock: 3,
+              ),
+            ]
+          : <MarketEquipmentListing>[];
+      return LocalMarketState(
+        sectorId: sectorId,
+        marketName: isBlack ? '0-0 BLACK MARKET' : '$sectorId LOCAL MARKET',
+        isBlackMarket: isBlack,
+        resourceListings: resources,
+        equipmentListings: eq,
+      );
+    });
+  }
+
+  bool buyBasicVendorItem(BasicVendorItemId item) {
+    final int price = isAdminMode ? 0 : item.priceCredits;
+    if (!isAdminMode && credits < price) return false;
+    if (!isAdminMode) credits -= price;
+    switch (item) {
+      case BasicVendorItemId.basicLaserT1:
+        ownedItems.add(
+          EquipmentItem(
+            instanceId: _nextItemInstanceId++,
+            id: EquipmentItemId.lf1,
+          ),
+        );
+        break;
+      case BasicVendorItemId.basicShieldT1:
+        ownedItems.add(
+          EquipmentItem(
+            instanceId: _nextItemInstanceId++,
+            id: EquipmentItemId.sg1,
+          ),
+        );
+        break;
+      case BasicVendorItemId.basicToolT1:
+        basicToolsOwned += 1;
+        break;
+      case BasicVendorItemId.basicRepairKit:
+        player.hp = currentMaxHull;
+        player.shield = currentMaxShield;
+        break;
+    }
+    saveGame();
+    notifyUi();
+    return true;
+  }
+
+  bool buyMarketResource(ResourceType res, bool isRefined, int qty) {
+    if (qty <= 0) return false;
+    final LocalMarketState market = getOrCreateLocalMarket(currentSectorId);
+    MarketResourceListing? listing;
+    for (final MarketResourceListing l in market.resourceListings) {
+      if (l.resourceType == res && l.isRefined == isRefined) {
+        listing = l;
+        break;
+      }
+    }
+    if (listing == null) return false;
+    if (!isAdminMode) {
+      if (listing.localStock < qty) return false;
+      if (remainingCargoCapacity < qty) return false;
+      final int cost = listing.buyPrice * qty;
+      if (credits < cost) return false;
+      credits -= cost;
+      listing.localStock -= qty;
+    }
+    final Map<ResourceType, int> pool = isRefined ? refinedCargo : rawCargo;
+    pool[res] = (pool[res] ?? 0) + qty;
+    saveGame();
+    notifyUi();
+    return true;
+  }
+
+  int sellMarketResource(ResourceType res, bool isRefined, int qty) {
+    if (qty <= 0) return 0;
+    final Map<ResourceType, int> pool = isRefined ? refinedCargo : rawCargo;
+    final int owned = pool[res] ?? 0;
+    final int sellQty = min(owned, qty);
+    if (sellQty <= 0) return 0;
+    final LocalMarketState market = getOrCreateLocalMarket(currentSectorId);
+    MarketResourceListing? listing;
+    for (final MarketResourceListing l in market.resourceListings) {
+      if (l.resourceType == res && l.isRefined == isRefined) {
+        listing = l;
+        break;
+      }
+    }
+    final int unitPrice = listing?.sellPrice ??
+        (isRefined
+            ? ResourceCatalog.of(res).refinedBasePrice
+            : ResourceCatalog.of(res).rawBasePrice);
+    final int nextQty = owned - sellQty;
+    if (nextQty <= 0) {
+      pool.remove(res);
+    } else {
+      pool[res] = nextQty;
+    }
+    credits += sellQty * unitPrice;
+    if (listing != null) {
+      listing.localStock += sellQty;
+    }
+    saveGame();
+    notifyUi();
+    return sellQty;
+  }
+
+  bool buyMarketEquipment(EquipmentItemId itemId) {
+    final LocalMarketState market = getOrCreateLocalMarket(currentSectorId);
+    MarketEquipmentListing? listing;
+    for (final MarketEquipmentListing l in market.equipmentListings) {
+      if (l.itemId == itemId) {
+        listing = l;
+        break;
+      }
+    }
+    if (listing == null) return false;
+    if (!isAdminMode) {
+      if (listing.localStock <= 0 || credits < listing.buyPrice) return false;
+      credits -= listing.buyPrice;
+      listing.localStock -= 1;
+    }
+    ownedItems.add(
+      EquipmentItem(instanceId: _nextItemInstanceId++, id: itemId),
+    );
+    saveGame();
+    notifyUi();
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Death / Loot (60/40) Rules & Permanent Capsule Respawn
+  // ---------------------------------------------------------------------------
+  void handlePlayerDeath() {
+    final bool wasInCapsule = activeShipRole == ShipRole.capsule;
+    final String? destroyedShipName =
+        wasInCapsule ? null : activeShipDisplayName;
+    final String deathSectorId = currentSectorId;
+    final double deathX = player.position.x;
+    final double deathY = player.position.y;
+
+    // 60% of cargo drops to PlayerShipWreck, 40% permanently destroyed
+    final Map<ResourceType, int> droppedRaw = <ResourceType, int>{};
+    final Map<ResourceType, int> droppedRef = <ResourceType, int>{};
+    int cargoDropCount = 0;
+    int cargoDestroyCount = 0;
+
+    for (final MapEntry<ResourceType, int> e in rawCargo.entries) {
+      final int qty = e.value;
+      if (qty <= 0) continue;
+      final int drop = (qty * 0.6).round();
+      final int lost = qty - drop;
+      if (drop > 0) droppedRaw[e.key] = drop;
+      cargoDropCount += drop;
+      cargoDestroyCount += lost;
+    }
+    for (final MapEntry<ResourceType, int> e in refinedCargo.entries) {
+      final int qty = e.value;
+      if (qty <= 0) continue;
+      final int drop = (qty * 0.6).round();
+      final int lost = qty - drop;
+      if (drop > 0) droppedRef[e.key] = drop;
+      cargoDropCount += drop;
+      cargoDestroyCount += lost;
+    }
+    rawCargo.clear();
+    refinedCargo.clear();
+
+    // Non-Capsule equipped ship gear splits 60% drop / 40% destroyed
+    final List<EquipmentItem> droppedGear = <EquipmentItem>[];
+    int gearDropCount = 0;
+    int gearDestroyCount = 0;
+    if (!wasInCapsule) {
+      final Set<int> equippedIds = <int>{};
+      for (final EquipmentItem? item in laserSlots) {
+        if (item != null) equippedIds.add(item.instanceId);
+      }
+      for (final EquipmentItem? item in shieldSlots) {
+        if (item != null) equippedIds.add(item.instanceId);
+      }
+      for (int i = 0; i < config1LaserSlots.length; i++) {
+        if (config1LaserSlots[i] != null &&
+            equippedIds.contains(config1LaserSlots[i]!.instanceId)) {
+          config1LaserSlots[i] = null;
+        }
+      }
+      for (int i = 0; i < config2LaserSlots.length; i++) {
+        if (config2LaserSlots[i] != null &&
+            equippedIds.contains(config2LaserSlots[i]!.instanceId)) {
+          config2LaserSlots[i] = null;
+        }
+      }
+      for (int i = 0; i < config1ShieldSlots.length; i++) {
+        if (config1ShieldSlots[i] != null &&
+            equippedIds.contains(config1ShieldSlots[i]!.instanceId)) {
+          config1ShieldSlots[i] = null;
+        }
+      }
+      for (int i = 0; i < config2ShieldSlots.length; i++) {
+        if (config2ShieldSlots[i] != null &&
+            equippedIds.contains(config2ShieldSlots[i]!.instanceId)) {
+          config2ShieldSlots[i] = null;
+        }
+      }
+      final List<EquipmentItem> lostEquipped = ownedItems
+          .where((EquipmentItem e) => equippedIds.contains(e.instanceId))
+          .toList();
+      ownedItems
+          .removeWhere((EquipmentItem e) => equippedIds.contains(e.instanceId));
+      for (final EquipmentItem item in lostEquipped) {
+        if (rng.nextDouble() < 0.6) {
+          droppedGear.add(item);
+          gearDropCount++;
+        } else {
+          gearDestroyCount++;
+        }
+      }
+
+      // Destroy active non-capsule ship
+      if (activeShipRole == ShipRole.industrial && activeCraftedShipId != null) {
+        ownedCraftedShips.removeWhere(
+          (CraftedShipRecord s) => s.instanceId == activeCraftedShipId,
+        );
+      } else if (activeShipRole == ShipRole.combat &&
+          activeShipClass != ShipClass.interceptor) {
+        ownedShipClasses.remove(activeShipClass);
+      }
+    }
+
+    if (cargoDropCount > 0 || gearDropCount > 0) {
+      playerWrecks.add(
+        PlayerShipWreck(
+          id: _nextWorldEntityId++,
+          sectorId: deathSectorId,
+          x: deathX,
+          y: deathY,
+          shipName: destroyedShipName ?? 'Capsule',
+          isCapsuleWreck: wasInCapsule,
+          rawCargo: droppedRaw,
+          refinedCargo: droppedRef,
+          droppedEquipment: droppedGear,
+        ),
+      );
+    }
+
+    // Respawn in Home Capital City inside the permanent Pilot Capsule
+    final String homeCity = GalaxyMapGraph.homeCityForCompany(pilotCompany);
+    activeShipRole = ShipRole.capsule;
+    activeCraftedShipId = null;
+    autoFireEnabled = false;
+    lockedTarget = null;
+    cancelAutopilot();
+
+    if (currentSectorId != homeCity) {
+      jumpToSector(homeCity);
+    } else {
+      player.position.setFrom(activeSafeZoneCenter);
+    }
+    player.hp = currentMaxHull;
+    player.shield = currentMaxShield;
+    _snapVantsToFormation();
+
+    lastDeathSummary = DeathSummary(
+      wasInCapsule: wasInCapsule,
+      destroyedShipName: destroyedShipName,
+      deathSectorId: deathSectorId,
+      deathX: deathX.round(),
+      deathY: deathY.round(),
+      cargoDroppedToWreck: cargoDropCount,
+      cargoDestroyed: cargoDestroyCount,
+      gearDroppedToWreck: gearDropCount,
+      gearDestroyed: gearDestroyCount,
+      vantsDamagedCount: ownedVants.length,
+      homeCityId: homeCity,
+    );
+
+    saveGame();
+    closeAllModalOverlays();
+    pauseEngine();
+    overlays.add(deathOverlayId);
+    notifyUi();
+  }
+
   void setPlottedRoute(List<String> route) {
     plottedRoute = List<String>.unmodifiable(route);
+    notifyUi();
   }
 
   void clearPlottedRoute() {
     plottedRoute = <String>[];
+    notifyUi();
   }
 
   bool engageAutopilotToNextRoutePortal() {
@@ -1187,8 +2690,9 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       return true;
     }
     final DroneFormationSpec spec = DroneFormationCatalog.of(formation);
-    if (credits < spec.cost) return false;
-    credits -= spec.cost;
+    final int cost = isAdminMode ? 0 : spec.cost;
+    if (!isAdminMode && credits < cost) return false;
+    if (!isAdminMode) credits -= cost;
     ownedFormations.add(formation);
     activeFormation = formation;
     _syncPlayerVitalsToStats();
@@ -1228,7 +2732,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     final List<VantDrone> active = activeVants;
     final int total = active.length;
     if (total == 0) return;
-    final double hullR = activeShipSpec.hullRadius;
+    final double hullR = activeHullRadius;
     final double cosA = cos(player.angle);
     final double sinA = sin(player.angle);
     for (int i = 0; i < total; i++) {
@@ -1253,7 +2757,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     final List<VantDrone> active = activeVants;
     final int total = active.length;
     if (total == 0) return;
-    final double hullR = activeShipSpec.hullRadius;
+    final double hullR = activeHullRadius;
     final double cosA = cos(player.angle);
     final double sinA = sin(player.angle);
     final double posAlpha = 1.0 - exp(-9.5 * dt);
@@ -1292,25 +2796,37 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   // Ship Classes (Interceptor, Battlecruiser, Dreadnought)
   // ---------------------------------------------------------------------------
   bool buyOrSelectShipClass(ShipClass shipClass) {
+    if (!canSwapShipsHere) return false;
     if (ownedShipClasses.contains(shipClass)) {
-      if (activeShipClass == shipClass) return false;
+      if (activeShipRole == ShipRole.combat && activeShipClass == shipClass) {
+        return false;
+      }
+      activeShipRole = ShipRole.combat;
+      activeCraftedShipId = null;
       activeShipClass = shipClass;
       _resizeSlotsForShip(shipClass);
       _syncPlayerVitalsToStats();
+      player.hp = currentMaxHull;
+      player.shield = currentMaxShield;
       saveGame();
+      notifyUi();
       return true;
     }
     final ShipClassSpec spec = ShipClassCatalog.of(shipClass);
-    if (credits < spec.cost) return false;
+    final int cost = isAdminMode ? 0 : spec.cost;
+    if (!isAdminMode && credits < cost) return false;
     final double oldMaxHull = currentMaxHull;
-    credits -= spec.cost;
+    if (!isAdminMode) credits -= cost;
     ownedShipClasses.add(shipClass);
+    activeShipRole = ShipRole.combat;
+    activeCraftedShipId = null;
     activeShipClass = shipClass;
     _resizeSlotsForShip(shipClass);
     final double hullDelta = max(0.0, currentMaxHull - oldMaxHull);
     player.hp = min(currentMaxHull, player.hp + hullDelta);
     _syncPlayerVitalsToStats();
     saveGame();
+    notifyUi();
     return true;
   }
 
@@ -1342,11 +2858,12 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   bool buyFlaxVant() {
     if (!canBuyFlaxVant) return false;
-    if (credits < GameConstants.flaxVantCost) return false;
-    credits -= GameConstants.flaxVantCost;
+    if (!isAdminMode && credits < GameConstants.flaxVantCost) return false;
+    if (!isAdminMode) credits -= GameConstants.flaxVantCost;
     ownedVants.add(VantDrone(id: _nextVantId++, tier: VantTier.flax));
     _clearReserveVantSlots();
     saveGame();
+    notifyUi();
     return true;
   }
 
@@ -1477,10 +2994,11 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   bool buyEquipment(EquipmentItemId itemId) {
     final EquipmentSpec spec = EquipmentCatalog.of(itemId);
     final int? cost = spec.shopCost;
-    if (cost == null || credits < cost) {
+    if (cost == null) return false;
+    if (!isAdminMode && credits < cost) {
       return false;
     }
-    credits -= cost;
+    if (!isAdminMode) credits -= cost;
     final EquipmentItem newItem = EquipmentItem(
       instanceId: _nextItemInstanceId++,
       id: itemId,
@@ -1499,6 +3017,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
     _syncPlayerVitalsToStats(shieldDeltaAdded: shieldAdded);
     saveGame();
+    notifyUi();
     return true;
   }
 
@@ -1818,19 +3337,11 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
   }
 
-  // Temporary Developer / Testing Helpers
+  // Developer / Testing Helpers
   void debugAddOneMillionCredits() {
     credits += 1000000;
     saveGame();
-  }
-
-  void debugAddOneLevel() {
-    final int needed = max(
-      1,
-      GameConstants.xpRequiredForLevel(player.level) - player.xp,
-    );
-    addXp(needed);
-    saveGame();
+    notifyUi();
   }
 
   // ---------------------------------------------------------------------------
@@ -1885,7 +3396,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       HomingRocketComponent(
         position: player.position +
             Vector2(cos(launchAngle), sin(launchAngle)) *
-                (activeShipSpec.hullRadius + 4.0),
+                (activeHullRadius + 4.0),
         angle: launchAngle,
         target: target,
         damage: rocketDmg,
@@ -2163,8 +3674,20 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
           ? 16.0
           : 13.5,
     );
-    // Guaranteed Cargo Box drop
+    // Guaranteed Cargo Box + Salvageable Alien Wreck drop
     spawnCargoBox(alien.position, spec, isBoss: alien.isBoss);
+    alienWrecks.add(
+      AlienWreckEntity(
+        id: _nextWorldEntityId++,
+        sourceTier: alien.tier,
+        fromBoss: alien.isBoss,
+        x: alien.position.x + (rng.nextDouble() - 0.5) * 28.0,
+        y: alien.position.y + (rng.nextDouble() - 0.5) * 28.0,
+        rotationRad: alien.angle,
+        maxCharges: 2 + rng.nextInt(3), // 2-4 salvage charges
+      ),
+    );
+    addSkillXp(SkillType.weaponry, alien.isBoss ? 55 : 22);
     if (lockedTarget == alien) {
       lockedTarget = null;
     }
@@ -2175,13 +3698,16 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   @override
   void onTapDown(TapDownEvent event) {
     super.onTapDown(event);
+    if (isPinching) return;
     if (isFormationMenuOpen) {
       isFormationMenuOpen = false;
       return;
     }
     final Vector2 worldPos = camera.globalToLocal(event.canvasPosition);
+
+    // 1. Check tapped Alien Ship
     AlienShipComponent? tapped;
-    double bestDist = 74.0;
+    double bestDist = 74.0 / max(0.6, cameraZoom);
     for (final AlienShipComponent alien in aliens) {
       final double d = alien.position.distanceTo(worldPos);
       if (d <= max(bestDist, alien.effectiveRadius + 32.0)) {
@@ -2191,6 +3717,38 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
     if (tapped != null) {
       lockedTarget = tapped;
+      return;
+    }
+
+    // 2. Check tapped Sector Station (dock immediately if within range, or fly to it)
+    for (final SectorStation st in activeStations) {
+      final double d = hypot(st.worldX - worldPos.x, st.worldY - worldPos.y);
+      if (d <= 85.0) {
+        final double playerDist =
+            hypot(st.worldX - player.position.x, st.worldY - player.position.y);
+        if (playerDist <= st.interactRadius ||
+            currentSector.isCapitalCity ||
+            (currentSector.isNucleus && player.inSafeZone)) {
+          openStation(initialTab: st.kind);
+        } else {
+          setAutopilotTarget(st.worldX, st.worldY);
+        }
+        return;
+      }
+    }
+
+    // 3. Check tapped Resource Node or Alien Wreck -> steer directly to it
+    for (final AlienWreckEntity w in alienWrecks) {
+      if (hypot(w.x - worldPos.x, w.y - worldPos.y) <= w.radius + 36.0) {
+        setAutopilotTarget(w.x, w.y);
+        return;
+      }
+    }
+    for (final ResourceNodeEntity n in resourceNodes) {
+      if (hypot(n.x - worldPos.x, n.y - worldPos.y) <= n.radius + 36.0) {
+        setAutopilotTarget(n.x, n.y);
+        return;
+      }
     }
   }
 }
@@ -2225,8 +3783,9 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
     final SectorNode sector = gameRef.currentSector;
     final double mapSize = sector.mapSize;
     final Vector2 cam = gameRef.camera.viewfinder.position;
-    final double halfW = gameRef.size.x * 0.5 + 80.0;
-    final double halfH = gameRef.size.y * 0.5 + 80.0;
+    final double invZoom = 1.0 / max(0.25, gameRef.cameraZoom);
+    final double halfW = gameRef.size.x * 0.5 * invZoom + 120.0;
+    final double halfH = gameRef.size.y * 0.5 * invZoom + 120.0;
     final double halfDiag = sqrt(halfW * halfW + halfH * halfH);
 
     final Paint starPaint = Paint();
@@ -2260,12 +3819,15 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       }
     }
 
+    _drawSectorStations(canvas);
+    _drawResourceNodesAndWrecks(canvas);
     _drawAllSectorPortals(canvas, cam, halfW, halfH);
 
-    // World-space Autopilot faint dashed trajectory & pulsing waypoint crosshair
+    // World-space Direct Tap-to-Move faint dashed trajectory & pulsing crosshair
     final Vector2? ap = gameRef.autopilotTarget;
     if (ap != null) {
-      final Offset start = Offset(gameRef.player.position.x, gameRef.player.position.y);
+      final Offset start =
+          Offset(gameRef.player.position.x, gameRef.player.position.y);
       final Offset end = Offset(ap.x, ap.y);
       final double dx = end.dx - start.dx;
       final double dy = end.dy - start.dy;
@@ -2276,7 +3838,6 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
         final Paint dashPaint = Paint()
           ..color = const Color(0x5500E5FF)
           ..strokeWidth = 2.0;
-        // Draw dashed segments within visible range around player/camera
         final double maxDraw = min(totalDist, halfDiag + 200.0);
         double d = 24.0;
         while (d < maxDraw) {
@@ -2315,6 +3876,203 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
         );
         canvas.drawCircle(end, 3.5, Paint()..color = Colors.white);
       }
+    }
+  }
+
+  void _drawSectorStations(Canvas canvas) {
+    final double pulse = 0.7 + 0.3 * sin(gameRef.elapsedTime * 4.0);
+    for (final SectorStation st in gameRef.activeStations) {
+      final Vector2 pos = Vector2(st.worldX, st.worldY);
+      if (!gameRef.isInViewport(pos, margin: 180.0)) continue;
+      final Offset c = Offset(st.worldX, st.worldY);
+      canvas.drawCircle(
+        c,
+        st.interactRadius * 0.62,
+        Paint()..color = st.accentColor.withOpacity(0.10),
+      );
+      canvas.drawCircle(
+        c,
+        st.interactRadius * 0.62,
+        Paint()
+          ..color = st.accentColor.withOpacity(0.55 * pulse)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0,
+      );
+      final Path hex = Path();
+      for (int i = 0; i < 6; i++) {
+        final double a = i * pi / 3.0 + gameRef.elapsedTime * 0.25;
+        final double x = c.dx + cos(a) * 34.0;
+        final double y = c.dy + sin(a) * 34.0;
+        if (i == 0) {
+          hex.moveTo(x, y);
+        } else {
+          hex.lineTo(x, y);
+        }
+      }
+      hex.close();
+      canvas.drawPath(hex, Paint()..color = const Color(0xFF0E1A30));
+      canvas.drawPath(
+        hex,
+        Paint()
+          ..color = st.accentColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4,
+      );
+      canvas.drawCircle(c, 8.0, Paint()..color = st.accentColor);
+      TextPaint(
+        style: TextStyle(
+          color: st.accentColor,
+          fontSize: 11.5,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.8,
+        ),
+      ).render(
+        canvas,
+        st.name,
+        Vector2(c.dx, c.dy + 48.0),
+        anchor: Anchor.center,
+      );
+    }
+  }
+
+  void _drawResourceNodesAndWrecks(Canvas canvas) {
+    final double t = gameRef.elapsedTime;
+    final Offset playerPos =
+        Offset(gameRef.player.position.x, gameRef.player.position.y);
+
+    // 1. Resource Nodes (with charge pips & mining beam)
+    for (final ResourceNodeEntity node in gameRef.resourceNodes) {
+      final Vector2 v = Vector2(node.x, node.y);
+      if (!gameRef.isInViewport(v, margin: 70.0)) continue;
+      final ResourceSpec spec = ResourceCatalog.of(node.resourceType);
+      final Offset c = Offset(node.x, node.y);
+      final double pulse = 0.72 + 0.28 * sin(t * 3.5 + node.pulsePhase);
+
+      canvas.drawCircle(
+        c,
+        node.radius * 1.35,
+        Paint()..color = spec.color.withOpacity(0.14 * pulse),
+      );
+      final Path rock = Path();
+      const int sides = 6;
+      for (int i = 0; i < sides; i++) {
+        final double a = node.rotationRad + i * (2.0 * pi / sides);
+        final double r = node.radius * (i.isEven ? 1.0 : 0.76);
+        final double x = c.dx + cos(a) * r;
+        final double y = c.dy + sin(a) * r;
+        if (i == 0) {
+          rock.moveTo(x, y);
+        } else {
+          rock.lineTo(x, y);
+        }
+      }
+      rock.close();
+      canvas.drawPath(rock, Paint()..color = const Color(0xFF162033));
+      canvas.drawPath(
+        rock,
+        Paint()
+          ..color = spec.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0,
+      );
+      canvas.drawCircle(c, 4.5, Paint()..color = spec.color);
+
+      // Charge pips below node
+      final double pipSpan = (node.maxCharges - 1) * 7.5;
+      for (int i = 0; i < node.maxCharges; i++) {
+        canvas.drawCircle(
+          Offset(c.dx - pipSpan * 0.5 + i * 7.5, c.dy + node.radius + 9.0),
+          2.5,
+          Paint()
+            ..color = i < node.charges
+                ? spec.color
+                : const Color(0xFF334155),
+        );
+      }
+
+      if (gameRef.activeMiningNode == node) {
+        canvas.drawLine(
+          playerPos,
+          c,
+          Paint()
+            ..color = spec.color.withOpacity(0.85)
+            ..strokeWidth = 3.2,
+        );
+        canvas.drawLine(
+          playerPos,
+          c,
+          Paint()
+            ..color = Colors.white
+            ..strokeWidth = 1.2,
+        );
+      }
+    }
+
+    // 2. Salvageable Alien Wrecks
+    for (final AlienWreckEntity w in gameRef.alienWrecks) {
+      final Vector2 v = Vector2(w.x, w.y);
+      if (!gameRef.isInViewport(v, margin: 70.0)) continue;
+      final Offset c = Offset(w.x, w.y);
+      final double pulse = 0.65 + 0.35 * sin(t * 4.5 + w.pulsePhase);
+      canvas.drawCircle(
+        c,
+        w.radius * 1.25,
+        Paint()..color = const Color(0xFFC084FC).withOpacity(0.16 * pulse),
+      );
+      final Path hull = Path()
+        ..moveTo(c.dx + w.radius, c.dy - 4.0)
+        ..lineTo(c.dx + 4.0, c.dy - w.radius * 0.85)
+        ..lineTo(c.dx - w.radius * 0.8, c.dy - 6.0)
+        ..lineTo(c.dx - w.radius * 0.4, c.dy + w.radius * 0.75)
+        ..lineTo(c.dx + w.radius * 0.6, c.dy + 5.0)
+        ..close();
+      canvas.drawPath(hull, Paint()..color = const Color(0xFF2E1065));
+      canvas.drawPath(
+        hull,
+        Paint()
+          ..color = const Color(0xFFC084FC)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.8,
+      );
+      if (gameRef.activeSalvageWreck == w) {
+        canvas.drawLine(
+          playerPos,
+          c,
+          Paint()
+            ..color = const Color(0xFFE879F9)
+            ..strokeWidth = 3.0,
+        );
+      }
+    }
+
+    // 3. Player Ship Wrecks (60% recoverable loot)
+    for (final PlayerShipWreck pw in gameRef.playerWrecks) {
+      if (pw.sectorId != gameRef.currentSectorId) continue;
+      final Vector2 v = Vector2(pw.x, pw.y);
+      if (!gameRef.isInViewport(v, margin: 80.0)) continue;
+      final Offset c = Offset(pw.x, pw.y);
+      final double pulse = 0.55 + 0.45 * sin(t * 5.0);
+      canvas.drawCircle(
+        c,
+        28.0 + 6.0 * pulse,
+        Paint()
+          ..color = const Color(0xFF4ADE80).withOpacity(0.75 * pulse)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4,
+      );
+      canvas.drawCircle(c, 10.0, Paint()..color = const Color(0xFF22C55E));
+      TextPaint(
+        style: const TextStyle(
+          color: Color(0xFF86EFAC),
+          fontSize: 10.5,
+          fontWeight: FontWeight.bold,
+        ),
+      ).render(
+        canvas,
+        'WRECK (${pw.totalCargoUnits})',
+        Vector2(c.dx, c.dy - 36.0),
+        anchor: Anchor.center,
+      );
     }
   }
 
@@ -2892,7 +4650,7 @@ class PlayerShipComponent extends PositionComponent
           angle: fireAngle,
           fromPlayer: true,
           damage: gameRef.currentLaserDamage,
-          color: gameRef.activeShipSpec.accentColor,
+          color: gameRef.activeShipAccentColor,
           homingTarget: target,
         ),
       );
@@ -2919,7 +4677,7 @@ class PlayerShipComponent extends PositionComponent
       position: position +
           Vector2(
             (gameRef.rng.nextDouble() - 0.5) * 16.0,
-            -gameRef.activeShipSpec.hullRadius - 28.0,
+            -gameRef.activeHullRadius - 28.0,
           ),
       text: isRadiation ? '-${amount.round()} RAD' : '-${amount.round()}',
       color: isRadiation
@@ -2928,27 +4686,14 @@ class PlayerShipComponent extends PositionComponent
       fontSize: 13.5,
     );
     if (hp <= 0.0) {
-      hp = gameRef.currentMaxHull;
-      shield = gameRef.currentMaxShield;
-      final String homeCity =
-          GalaxyMapGraph.homeCityForCompany(gameRef.pilotCompany);
-      if (gameRef.currentSector.hasCentralSafeZone) {
-        position.setFrom(gameRef.activeSafeZoneCenter);
-      } else {
-        gameRef.jumpToSector(homeCity);
-      }
-      gameRef.autoFireEnabled = false;
-      gameRef.cancelAutopilot();
-      gameRef._snapVantsToFormation();
-      gameRef.saveGame();
+      gameRef.handlePlayerDeath();
     }
   }
 
   @override
   void render(Canvas canvas) {
     final Offset center = Offset(size.x * 0.5, size.y * 0.5);
-    final ShipClassSpec spec = gameRef.activeShipSpec;
-    final double hullR = spec.hullRadius;
+    final double hullR = gameRef.activeHullRadius;
 
     // Radar Cone (only while right joystick is actively tilted)
     final Vector2 aim = gameRef.aimJoystick.relativeDelta;
@@ -2997,8 +4742,17 @@ class PlayerShipComponent extends PositionComponent
       );
     }
 
-    // Draw high-contrast layered sci-fi spacecraft for the active Ship Class
-    _drawShipClassSilhouette(canvas, center, spec);
+    // Explicitly branch on ShipRole & IndustrialType with Dynamic LOD (cameraZoom >= 1.35x)
+    ShipVectorRenderer.drawShip(
+      canvas: canvas,
+      center: center,
+      role: gameRef.activeShipRole,
+      combatClass: gameRef.activeShipClass,
+      industrialType: gameRef.activeIndustrialType,
+      thrustFactor: thrustFactor,
+      thrusterPhase: thrusterPhase,
+      cameraZoom: gameRef.cameraZoom,
+    );
 
     // Translucent cyan/blue energy shield bubble ring on Shield Hit (~0.25s fade)
     if (shieldHitFlash > 0.01) {
@@ -4538,7 +6292,7 @@ class VantFleetComponent extends Component with HasGameRef<DarkOrbitGame> {
 
     // Subtle formation ring guide for RING formation only (WHEEL draws drones only)
     if (gameRef.activeFormation == DroneFormation.ring) {
-      final double baseR = gameRef.activeShipSpec.hullRadius + 28.0;
+      final double baseR = gameRef.activeHullRadius + 28.0;
       final double r = baseR * 1.08;
       canvas.drawCircle(
         Offset(gameRef.player.position.x, gameRef.player.position.y),
@@ -5039,7 +6793,7 @@ class LaserBoltComponent extends PositionComponent
         }
       }
     } else if (position.distanceTo(gameRef.player.position) <=
-        gameRef.activeShipSpec.hullRadius + 6.0) {
+        gameRef.activeHullRadius + 6.0) {
       gameRef.player.takeDamage(damage);
       removeFromParent();
     }
@@ -5221,7 +6975,7 @@ class LootBoxComponent extends PositionComponent
 
     if (position.distanceTo(gameRef.player.position) <=
         GameConstants.lootCollectRadius +
-            (gameRef.activeShipSpec.hullRadius - 20.0)) {
+            (gameRef.activeHullRadius - 20.0)) {
       if (xpReward > 0) {
         gameRef.addXp(xpReward);
       }
@@ -5997,14 +7751,12 @@ class HangarButtonComponent extends PositionComponent
 
 class GalaxyMapButtonComponent extends PositionComponent
     with TapCallbacks, HasGameRef<DarkOrbitGame> {
-  GalaxyMapButtonComponent() : super(size: Vector2(76.0, 38.0));
+  GalaxyMapButtonComponent() : super(size: Vector2(126.0, 28.0));
 
   @override
   void onGameResize(Vector2 size) {
     super.onGameResize(size);
-    final double preferredX = 604.0;
-    final double maxX = max(510.0, size.x - 142.0 - 84.0);
-    position = Vector2(min(preferredX, maxX), 14.0);
+    position = Vector2(size.x - 142.0, 146.0);
   }
 
   @override
@@ -6027,34 +7779,22 @@ class GalaxyMapButtonComponent extends PositionComponent
       Paint()
         ..color = accent
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6,
+        ..strokeWidth = 1.5,
     );
     TextPaint(
       style: TextStyle(
         color: accent,
-        fontSize: 10.5,
+        fontSize: 10.2,
         fontWeight: FontWeight.w800,
       ),
     ).render(
       canvas,
-      'GALAXY',
-      Vector2(size.x * 0.5, hasRoute ? 13.0 : size.y * 0.5),
+      hasRoute
+          ? 'GALAXY → ${gameRef.nextRouteHopSectorId ?? ''}'
+          : 'GALAXY MAP',
+      Vector2(size.x * 0.5, size.y * 0.5),
       anchor: Anchor.center,
     );
-    if (hasRoute) {
-      TextPaint(
-        style: const TextStyle(
-          color: Color(0xFFE2E8F0),
-          fontSize: 8.6,
-          fontWeight: FontWeight.bold,
-        ),
-      ).render(
-        canvas,
-        '→ ${gameRef.nextRouteHopSectorId ?? ''}',
-        Vector2(size.x * 0.5, 26.5),
-        anchor: Anchor.center,
-      );
-    }
   }
 }
 
@@ -6179,7 +7919,7 @@ class TacticalHudComponent extends PositionComponent
     );
     lvPaint.render(
       canvas,
-      'LV ${gameRef.player.level}  •  ${gameRef.activeShipSpec.displayName.toUpperCase()}',
+      'LV ${gameRef.player.level}  •  ${gameRef.activeShipDisplayName.toUpperCase()}',
       Vector2(10.0, 22.0),
     );
     canvas.restore();
