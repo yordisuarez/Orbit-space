@@ -184,7 +184,6 @@ fun SpaceCombatScreen(
                 onOpenGalaxyMap = { viewModel.toggleGalaxyMap() },
                 onOpenSettings = { viewModel.openSettings() },
                 onToggleConfig = { viewModel.toggleConfig() },
-                onSelectFormation = { viewModel.selectOwnedFormationFromHud(it) },
                 onCancelAutopilot = { viewModel.cancelAutopilot() },
                 onClaimMission = { viewModel.claimMissionReward() },
                 onTogglePause = { viewModel.togglePause() },
@@ -206,58 +205,71 @@ fun SpaceCombatScreen(
                 modifier = Modifier.align(Alignment.BottomStart)
             )
 
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.align(Alignment.BottomEnd)
             ) {
-                val nearStationKind = hud.nearestStationKind
-                if (nearStationKind != null) {
-                    StationInteractButton(
-                        stationKind = nearStationKind,
-                        stationName = hud.nearestStationName
-                            ?: when (nearStationKind) {
-                                StationKind.REFINERY -> strings.ctrlRefineryShort
-                                StationKind.CRAFTING -> strings.ctrlCraftingShort
-                                StationKind.LOCAL_MARKET -> strings.ctrlMarketShort
-                            },
-                        isBlackMarket = hud.currentSectorId == "0-0",
-                        onInteract = { viewModel.openNearbyStation() },
+                CircularFormationButton(
+                    activeFormation = hud.activeFormation,
+                    ownedFormationsSet = hud.equipment.ownedFormations,
+                    cooldownRemaining = hud.formationCooldownRemaining,
+                    onSelectFormation = { viewModel.selectOwnedFormationFromHud(it) },
+                    modifier = Modifier.padding(end = 26.dp)
+                )
+
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val nearStationKind = hud.nearestStationKind
+                    if (nearStationKind != null) {
+                        StationInteractButton(
+                            stationKind = nearStationKind,
+                            stationName = hud.nearestStationName
+                                ?: when (nearStationKind) {
+                                    StationKind.REFINERY -> strings.ctrlRefineryShort
+                                    StationKind.CRAFTING -> strings.ctrlCraftingShort
+                                    StationKind.LOCAL_MARKET -> strings.ctrlMarketShort
+                                },
+                            isBlackMarket = hud.currentSectorId == "0-0",
+                            onInteract = { viewModel.openNearbyStation() },
+                            modifier = Modifier.padding(bottom = 14.dp)
+                        )
+                    }
+
+                    if (hud.isNearJumpGate) {
+                        JumpGateButton(
+                            gateLabel = hud.jumpGateLabel,
+                            targetSectorId = hud.nearestJumpTargetId,
+                            onJump = { viewModel.triggerJumpGate() },
+                            modifier = Modifier.padding(bottom = 14.dp)
+                        )
+                    }
+
+                    RocketFireButton(
+                        cooldownRemaining = hud.rocketCooldownRemaining,
+                        inSafeZone = hud.inSafeZone,
+                        onFireRocket = { viewModel.fireHomingRocket() },
                         modifier = Modifier.padding(bottom = 14.dp)
                     )
-                }
 
-                if (hud.isNearJumpGate) {
-                    JumpGateButton(
-                        gateLabel = hud.jumpGateLabel,
-                        targetSectorId = hud.nearestJumpTargetId,
-                        onJump = { viewModel.triggerJumpGate() },
+                    AttackLaserButton(
+                        isAutoFireEnabled = hud.isAutoFireEnabled,
+                        inSafeZone = hud.inSafeZone,
+                        hasTarget = hud.lockedTargetCallsign != null,
+                        targetInRange = hud.lockedTargetInRange,
+                        onToggle = { viewModel.toggleAutoFire() },
                         modifier = Modifier.padding(bottom = 14.dp)
                     )
+
+                    VirtualJoystick(
+                        label = strings.ctrlTarget,
+                        accentColor = CrimsonDanger,
+                        tag = "right_targeting_joystick",
+                        onMove = { x, y -> viewModel.setAimJoystick(x, y) }
+                    )
                 }
-
-                RocketFireButton(
-                    cooldownRemaining = hud.rocketCooldownRemaining,
-                    inSafeZone = hud.inSafeZone,
-                    onFireRocket = { viewModel.fireHomingRocket() },
-                    modifier = Modifier.padding(bottom = 14.dp)
-                )
-
-                AttackLaserButton(
-                    isAutoFireEnabled = hud.isAutoFireEnabled,
-                    inSafeZone = hud.inSafeZone,
-                    hasTarget = hud.lockedTargetCallsign != null,
-                    targetInRange = hud.lockedTargetInRange,
-                    onToggle = { viewModel.toggleAutoFire() },
-                    modifier = Modifier.padding(bottom = 14.dp)
-                )
-
-                VirtualJoystick(
-                    label = strings.ctrlTarget,
-                    accentColor = CrimsonDanger,
-                    tag = "right_targeting_joystick",
-                    onMove = { x, y -> viewModel.setAimJoystick(x, y) }
-                )
             }
         }
 

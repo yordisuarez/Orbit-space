@@ -571,6 +571,175 @@ fun StationInteractButton(
 }
 
 @Composable
+fun CircularFormationButton(
+    activeFormation: DroneFormation,
+    ownedFormationsSet: Set<DroneFormation>,
+    cooldownRemaining: Float,
+    onSelectFormation: (DroneFormation) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val fmDesc = stringResource(R.string.cd_cycle_formation)
+    val fmColor = Color(activeFormation.accentHex)
+    val fmOnCooldown = cooldownRemaining > 0.05f
+    var isFormationMenuOpen by remember { mutableStateOf(false) }
+    val ownedFormations = remember(ownedFormationsSet) {
+        DroneFormation.entries.filter { it in ownedFormationsSet }
+    }
+
+    Box(modifier = modifier) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(50.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = when {
+                            isFormationMenuOpen -> listOf(Color(0xEE0B2A46), Color(0xDD061325))
+                            fmOnCooldown -> listOf(Color(0xCC1A2233), Color(0xCC0A101E))
+                            else -> listOf(fmColor.copy(alpha = 0.28f), Color(0xDD081122))
+                        }
+                    )
+                )
+                .border(
+                    width = if (isFormationMenuOpen) 2.2.dp else 1.6.dp,
+                    color = when {
+                        isFormationMenuOpen -> CyanLaser
+                        fmOnCooldown -> TacticalMuted.copy(alpha = 0.55f)
+                        else -> fmColor.copy(alpha = 0.88f)
+                    },
+                    shape = CircleShape
+                )
+                .clickable { isFormationMenuOpen = !isFormationMenuOpen }
+                .testTag("formation_menu_button")
+                .semantics { contentDescription = fmDesc }
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = activeFormation.shortCode,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (fmOnCooldown) TacticalMuted else fmColor,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Text(
+                    text = if (fmOnCooldown) {
+                        "${ceil(cooldownRemaining.toDouble()).toInt()}s"
+                    } else {
+                        "${ownedFormations.size}/${DroneFormation.entries.size}"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 8.5.sp,
+                    color = if (fmOnCooldown) AmberCredits else TacticalMuted,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = isFormationMenuOpen,
+            onDismissRequest = { isFormationMenuOpen = false },
+            containerColor = Color(0xF2071020),
+            border = BorderStroke(
+                1.3.dp,
+                if (fmOnCooldown) AmberCredits.copy(alpha = 0.85f) else CyanLaser.copy(alpha = 0.78f)
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .widthIn(max = 520.dp)
+                .testTag("formation_dropdown_menu")
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                if (fmOnCooldown) {
+                    Text(
+                        text = "CD ${ceil(cooldownRemaining.toDouble()).toInt()}s",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberCredits,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x33FBBF24))
+                            .border(1.dp, AmberCredits.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 7.dp, vertical = 5.dp)
+                    )
+                }
+
+                for (formation in ownedFormations) {
+                    val isActive = formation == activeFormation
+                    val accent = Color(formation.accentHex)
+                    val canActivate = !isActive && !fmOnCooldown
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(17.dp))
+                            .background(
+                                if (isActive) Color(0x3800E5FF) else Color(0xB30D182C)
+                            )
+                            .border(
+                                width = if (isActive) 1.8.dp else 1.dp,
+                                color = if (isActive) CyanLaser else SpaceHudBorder,
+                                shape = RoundedCornerShape(17.dp)
+                            )
+                            .clickable {
+                                if (canActivate) {
+                                    onSelectFormation(formation)
+                                }
+                                isFormationMenuOpen = false
+                            }
+                            .padding(horizontal = 10.dp)
+                            .testTag("formation_option_${formation.name.lowercase()}")
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(accent)
+                        )
+                        Text(
+                            text = formation.displayName.uppercase(),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                isActive -> Color.White
+                                fmOnCooldown -> TacticalMuted
+                                else -> accent
+                            },
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        if (isActive) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = CyanLaser,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TacticalMinimap(
     engine: SpaceGameEngine,
     frameTick: Long,
@@ -584,12 +753,12 @@ fun TacticalMinimap(
 
     Box(
         modifier = modifier
-            .size(134.dp)
+            .size(96.dp)
             .clip(CircleShape)
             .background(Color(0xDC080D1E))
-            .border(1.8.dp, sector.nodeColor.copy(alpha = 0.78f), CircleShape)
+            .border(1.6.dp, sector.nodeColor.copy(alpha = 0.78f), CircleShape)
             .clickable(onClick = onExpandMap)
-            .padding(4.dp)
+            .padding(3.dp)
             .testTag("tactical_minimap")
             .semantics { contentDescription = mapDesc }
     ) {
@@ -1333,7 +1502,6 @@ fun TopTacticalHud(
     onOpenGalaxyMap: () -> Unit,
     onOpenSettings: () -> Unit,
     onToggleConfig: () -> Unit,
-    onSelectFormation: (DroneFormation) -> Unit,
     onCancelAutopilot: () -> Unit,
     onClaimMission: () -> Unit,
     onTogglePause: () -> Unit,
@@ -1353,91 +1521,95 @@ fun TopTacticalHud(
     )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         modifier = modifier
     ) {
-        // Row 1: Credits/Kills/Level, Shield+Hull, Config, Formation, Hangar, Galaxy, Settings, Pause
+        // Row 1: Compact Stats (Credits/Kills/Level) + Simplified Action Buttons (CFG, Hangar, Galaxy, Settings, Pause)
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(SpaceHudPanel)
-                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp)
                     .testTag("credits_hud_panel")
             ) {
-                Icon(
-                    imageVector = Icons.Default.MonetizationOn,
-                    contentDescription = null,
-                    tint = AmberCredits,
-                    modifier = Modifier.size(18.dp)
-                )
-                Column {
-                    Text(
-                        text = strings.hudCredits,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TacticalMuted
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MonetizationOn,
+                        contentDescription = strings.hudCredits,
+                        tint = AmberCredits,
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = "%,d".format(hud.credits),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AmberCredits
+                        style = MaterialTheme.typography.labelMedium,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AmberCredits,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .height(24.dp)
+                        .height(16.dp)
                         .background(SpaceHudBorder)
                 )
 
-                Column {
-                    Text(
-                        text = strings.hudKills,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TacticalMuted
-                    )
-                    Text(
-                        text = hud.kills.toString(),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TacticalWhite
-                    )
-                }
+                Text(
+                    text = "${strings.hudKills.take(1)}:${hud.kills}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TacticalWhite,
+                    maxLines = 1,
+                    softWrap = false
+                )
 
                 Box(
                     modifier = Modifier
                         .width(1.dp)
-                        .height(24.dp)
+                        .height(16.dp)
                         .background(SpaceHudBorder)
                 )
 
                 Column(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.width(62.dp)
+                    modifier = Modifier.width(38.dp)
                 ) {
                     val xpRatio = (hud.playerXp.toFloat() / hud.playerXpToNext.coerceAtLeast(1)).coerceIn(0f, 1f)
                     Text(
-                        text = "${strings.hudLevelPrefix} ${hud.playerLevel}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Color(0xFFC084FC)
+                        text = "${strings.hudLevelPrefix}${hud.playerLevel}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFFC084FC),
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(4.dp)
+                            .height(3.dp)
                             .clip(RoundedCornerShape(2.dp))
                             .background(Color(0xFF060C18))
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth(xpRatio)
-                                .height(4.dp)
+                                .height(3.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(Color(0xFFC084FC))
                         )
@@ -1445,217 +1617,29 @@ fun TopTacticalHud(
                 }
             }
 
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .width(150.dp)
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(SpaceHudPanel)
-                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 6.dp, vertical = 5.dp)
-                    .testTag("vitals_hud_panel")
-            ) {
-                val shdRatio = (hud.playerShield.toFloat() / hud.playerMaxShield.coerceAtLeast(1)).coerceIn(0f, 1f)
-                val hpRatio = (hud.playerHp.toFloat() / hud.playerMaxHp.coerceAtLeast(1)).coerceIn(0f, 1f)
-
-                HudVitalBarRow(
-                    label = "${strings.hudShield}: ${hud.playerShield} / ${hud.playerMaxShield}",
-                    ratio = shdRatio,
-                    barColor = CyanThruster,
-                    tag = "hud_shield_bar"
-                )
-                HudVitalBarRow(
-                    label = "${strings.hudHp}: ${hud.playerHp} / ${hud.playerMaxHp}",
-                    ratio = hpRatio,
-                    barColor = if (hpRatio < 0.35f) CrimsonDanger else EmeraldHull,
-                    tag = "hud_hp_bar"
-                )
-            }
-
             val cfgDesc = stringResource(R.string.cd_switch_config)
             val cfgColor = if (hud.activeConfig == 1) CyanLaser else AmberCredits
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(SpaceHudPanel)
-                    .border(1.4.dp, cfgColor.copy(alpha = 0.75f), RoundedCornerShape(10.dp))
+                    .border(1.2.dp, cfgColor.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
                     .clickable(onClick = onToggleConfig)
-                    .padding(horizontal = 10.dp)
+                    .padding(horizontal = 8.dp)
                     .testTag("config_toggle_button")
                     .semantics { contentDescription = cfgDesc }
             ) {
                 Text(
                     text = if (hud.activeConfig == 1) strings.hudConfig1 else strings.hudConfig2,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = cfgColor
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = cfgColor,
+                    maxLines = 1,
+                    softWrap = false
                 )
-            }
-
-            // Interactive VANT Formation Dropdown Submenu Button
-            val fmDesc = stringResource(R.string.cd_cycle_formation)
-            val fmColor = Color(hud.activeFormation.accentHex)
-            val fmOnCooldown = hud.formationCooldownRemaining > 0.05f
-            var isFormationMenuOpen by remember { mutableStateOf(false) }
-            val ownedFormations = remember(hud.equipment.ownedFormations) {
-                DroneFormation.entries.filter { it in hud.equipment.ownedFormations }
-            }
-
-            Box {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            when {
-                                isFormationMenuOpen -> Color(0xE60B2239)
-                                fmOnCooldown -> Color(0xCC0D1628)
-                                else -> SpaceHudPanel
-                            }
-                        )
-                        .border(
-                            width = if (isFormationMenuOpen) 1.8.dp else 1.4.dp,
-                            color = when {
-                                isFormationMenuOpen -> CyanLaser
-                                fmOnCooldown -> TacticalMuted.copy(alpha = 0.5f)
-                                else -> fmColor.copy(alpha = 0.8f)
-                            },
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        .clickable { isFormationMenuOpen = !isFormationMenuOpen }
-                        .padding(horizontal = 9.dp)
-                        .testTag("formation_menu_button")
-                        .semantics { contentDescription = fmDesc }
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(1.dp)
-                    ) {
-                        Text(
-                            text = hud.activeFormation.shortCode,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (fmOnCooldown) TacticalMuted else fmColor,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = null,
-                            tint = if (isFormationMenuOpen) CyanLaser else fmColor,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                    Text(
-                        text = if (fmOnCooldown) {
-                            "${ceil(hud.formationCooldownRemaining.toDouble()).toInt()}s"
-                        } else {
-                            "FMN ${ownedFormations.size}/${DroneFormation.entries.size}"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (fmOnCooldown) AmberCredits else TacticalMuted,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-
-                DropdownMenu(
-                    expanded = isFormationMenuOpen,
-                    onDismissRequest = { isFormationMenuOpen = false },
-                    containerColor = Color(0xF0071020),
-                    border = BorderStroke(
-                        1.3.dp,
-                        if (fmOnCooldown) AmberCredits.copy(alpha = 0.85f) else CyanLaser.copy(alpha = 0.78f)
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .widthIn(max = 520.dp)
-                        .testTag("formation_dropdown_menu")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        if (fmOnCooldown) {
-                            Text(
-                                text = "CD ${ceil(hud.formationCooldownRemaining.toDouble()).toInt()}s",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AmberCredits,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                softWrap = false,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0x33FBBF24))
-                                    .border(1.dp, AmberCredits.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-                                    .padding(horizontal = 7.dp, vertical = 5.dp)
-                            )
-                        }
-
-                        for (formation in ownedFormations) {
-                            val isActive = formation == hud.activeFormation
-                            val accent = Color(formation.accentHex)
-                            val canActivate = !isActive && !fmOnCooldown
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                modifier = Modifier
-                                    .height(34.dp)
-                                    .clip(RoundedCornerShape(17.dp))
-                                    .background(
-                                        if (isActive) Color(0x3800E5FF) else Color(0xB30D182C)
-                                    )
-                                    .border(
-                                        width = if (isActive) 1.8.dp else 1.dp,
-                                        color = if (isActive) CyanLaser else SpaceHudBorder,
-                                        shape = RoundedCornerShape(17.dp)
-                                    )
-                                    .clickable {
-                                        if (canActivate) {
-                                            onSelectFormation(formation)
-                                        }
-                                        isFormationMenuOpen = false
-                                    }
-                                    .padding(horizontal = 10.dp)
-                                    .testTag("formation_option_${formation.name.lowercase()}")
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(accent)
-                                )
-                                Text(
-                                    text = formation.displayName.uppercase(),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = when {
-                                        isActive -> Color.White
-                                        fmOnCooldown -> TacticalMuted
-                                        else -> accent
-                                    },
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                                if (isActive) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = CyanLaser,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             val hangarDesc = stringResource(R.string.cd_hangar_open)
@@ -1668,18 +1652,18 @@ fun TopTacticalHud(
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(hangarBg)
                     .border(
-                        width = if (hud.inSafeZone || hasAlert) 1.8.dp else 1.dp,
+                        width = if (hud.inSafeZone || hasAlert) 1.4.dp else 1.dp,
                         color = hangarBorder,
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(8.dp)
                     )
                     .clickable(onClick = onOpenHangar)
-                    .padding(horizontal = 11.dp)
+                    .padding(horizontal = 8.dp)
                     .testTag("hangar_button")
                     .semantics { contentDescription = hangarDesc }
             ) {
@@ -1687,17 +1671,21 @@ fun TopTacticalHud(
                     imageVector = Icons.Default.Build,
                     contentDescription = null,
                     tint = if (hud.inSafeZone) CyanLaser else AmberCredits,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(13.dp)
                 )
                 Text(
                     text = strings.hudHangar,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (hud.inSafeZone) CyanLaser else TacticalWhite
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (hud.inSafeZone) CyanLaser else TacticalWhite,
+                    maxLines = 1,
+                    softWrap = false
                 )
                 if (hasAlert) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(6.dp)
                             .clip(CircleShape)
                             .background(if (hud.mission.isReadyToClaim) EmeraldHull else AmberCredits)
                     )
@@ -1707,18 +1695,18 @@ fun TopTacticalHud(
             val galaxyDesc = stringResource(R.string.cd_open_galaxy_map)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xCC0A1C33))
                     .border(
-                        width = if (hud.nextRouteHopSectorId != null) 1.8.dp else 1.2.dp,
+                        width = if (hud.nextRouteHopSectorId != null) 1.5.dp else 1.dp,
                         color = if (hud.nextRouteHopSectorId != null) CyanLaser.copy(alpha = glowPulse) else Color(0xCC38BDF8),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(8.dp)
                     )
                     .clickable(onClick = onOpenGalaxyMap)
-                    .padding(horizontal = 10.dp)
+                    .padding(horizontal = 8.dp)
                     .testTag("galaxy_map_button")
                     .semantics { contentDescription = galaxyDesc }
             ) {
@@ -1726,72 +1714,81 @@ fun TopTacticalHud(
                     imageVector = Icons.Default.Public,
                     contentDescription = null,
                     tint = CyanLaser,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(13.dp)
                 )
                 Text(
                     text = strings.hudGalaxy,
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
                     color = CyanLaser,
                     maxLines = 1,
                     softWrap = false
                 )
             }
 
-            IconButton(
-                onClick = onOpenSettings,
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(SpaceHudPanel)
-                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
+                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenSettings)
                     .testTag("settings_button")
+                    .semantics { contentDescription = strings.hudSettings }
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
-                    contentDescription = strings.hudSettings,
-                    tint = CyanLaser
+                    contentDescription = null,
+                    tint = CyanLaser,
+                    modifier = Modifier.size(17.dp)
                 )
             }
 
             val pauseDesc = stringResource(R.string.cd_pause_game)
-            IconButton(
-                onClick = onTogglePause,
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(SpaceHudPanel)
-                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
+                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(8.dp))
+                    .clickable(onClick = onTogglePause)
                     .testTag("pause_button")
+                    .semantics { contentDescription = pauseDesc }
             ) {
                 Icon(
                     imageVector = if (hud.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = pauseDesc,
-                    tint = CyanLaser
+                    contentDescription = null,
+                    tint = CyanLaser,
+                    modifier = Modifier.size(17.dp)
                 )
             }
         }
 
-        // Row 2: Active Sector Code Badge, Dynamic Zone Risk Badge, Plotted Route Hop, Locked Target, Coords
+        // Row 2: Compact Sector Code Badge, Dynamic Safe Zone / Risk Badge, Route Hop, Target, Coords
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             val activeSector = GalaxyMapGraph.sectorOf(hud.currentSectorId)
             val sectorColor = activeSector.nodeColor
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(activeSector.zoneType.badgeBgColor)
-                    .border(1.dp, sectorColor.copy(alpha = 0.88f), RoundedCornerShape(8.dp))
+                    .border(1.dp, sectorColor.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
                     .clickable(onClick = onOpenGalaxyMap)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
                     .testTag("map_name_badge")
             ) {
                 Text(
-                    text = "SEC ${activeSector.id}",
+                    text = activeSector.id,
                     style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
                     color = sectorColor,
                     fontWeight = FontWeight.ExtraBold
                 )
@@ -1820,23 +1817,24 @@ fun TopTacticalHud(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(zoneBg)
-                    .border(1.dp, zoneColor.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 9.dp, vertical = 4.dp)
+                    .border(1.dp, zoneColor.copy(alpha = 0.78f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
                     .testTag("zone_indicator_badge")
             ) {
                 Icon(
                     imageVector = zoneIcon,
                     contentDescription = null,
                     tint = zoneColor,
-                    modifier = Modifier.size(13.dp)
+                    modifier = Modifier.size(11.dp)
                 )
                 Text(
                     text = zoneLabel,
                     style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
                     color = zoneColor
                 )
             }

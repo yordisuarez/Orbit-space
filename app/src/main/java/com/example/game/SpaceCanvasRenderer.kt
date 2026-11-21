@@ -169,24 +169,46 @@ fun DrawScope.renderSpaceWorld(
             val hullR = engine.player.shipClass.hullRadius
             drawOrbitingVants(engine)
             drawPlayerShip(engine.player, engine.elapsedTime)
+            val hpInt = engine.player.hp.toInt().coerceAtLeast(0)
+            val maxHpInt = engine.player.maxHp.toInt().coerceAtLeast(1)
+            val hpRatio = (engine.player.hp / engine.player.maxHp).coerceIn(0f, 1f)
+            val shdRatio = (engine.player.shield / engine.player.maxShield).coerceIn(0f, 1f)
+            val barWidth = 78f
+            val hpBarTopY = engine.player.y - hullR - 23f
+            val shdBarTopY = hpBarTopY - 8f
+
             drawHealthBar(
                 centerX = engine.player.x,
-                topY = engine.player.y - hullR - 18f,
-                width = 56f,
-                height = 5.5f,
-                ratio = (engine.player.hp / engine.player.maxHp).coerceIn(0f, 1f),
-                fillColor = EmeraldHull,
-                glowColor = EmeraldHullBright
+                topY = hpBarTopY,
+                width = barWidth,
+                height = 8.5f,
+                ratio = hpRatio,
+                fillColor = if (hpRatio < 0.30f) CrimsonDanger else EmeraldHull,
+                glowColor = if (hpRatio < 0.30f) Color(0xFFFF6B81) else EmeraldHullBright
             )
             drawHealthBar(
                 centerX = engine.player.x,
-                topY = engine.player.y - hullR - 26f,
-                width = 56f,
-                height = 5f,
-                ratio = (engine.player.shield / engine.player.maxShield).coerceIn(0f, 1f),
+                topY = shdBarTopY,
+                width = barWidth,
+                height = 5.5f,
+                ratio = shdRatio,
                 fillColor = Color(0xFF0284C7),
                 glowColor = CyanThruster
             )
+
+            // Crisp numeric HP readout (current / max) cleanly above the on-ship bar
+            val hpText = "$hpInt / $maxHpInt"
+            val hpTextY = shdBarTopY - 4.5f
+            val nativeCanvasHp = drawContext.canvas.nativeCanvas
+            popupPaint.textSize = 12f
+            popupPaint.color = android.graphics.Color.argb(240, 3, 6, 18)
+            nativeCanvasHp.drawText(hpText, engine.player.x + 1.1f, hpTextY + 1.1f, popupPaint)
+            popupPaint.color = if (hpRatio < 0.30f) {
+                android.graphics.Color.rgb(255, 138, 154)
+            } else {
+                android.graphics.Color.rgb(236, 253, 245)
+            }
+            nativeCanvasHp.drawText(hpText, engine.player.x, hpTextY, popupPaint)
 
             // Pilot [TAG] Callsign neatly below ship tinted with Company color
             val pilotLabel = engine.pilotName?.let { name ->
