@@ -113,4 +113,11 @@
     <string name="onboarding_action_launch">LAUNCH SHIP</string>
     <string name="cd_company_emblem">Company emblem</string>
     <string name="cd_back">Go back</string>
+    <string name="action_galaxy_map">GALAXY</string>
+    <string name="cd_open_galaxy_map">Open 25-sector Galactic Flight Map</string>
+    <string name="galaxy_map_title">ORBI SPACE — GALACTIC MAP</string>
+    <string name="action_local_map">LOCAL</string>
+    <string name="action_reset_zoom">RESET</string>
+    <string name="action_plot_route">PLOT ROUTE</string>
+    <string name="action_fly_to_gate">FLY TO GATE</string>
 </resources>

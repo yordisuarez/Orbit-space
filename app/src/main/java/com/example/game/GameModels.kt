@@ -955,7 +955,8 @@ data class SaveState(
     val currentMissionIndex: Int,
     val currentMissionProgress: Int,
     val pilotName: String? = null,
-    val companyId: String? = null
+    val companyId: String? = null,
+    val currentSectorId: String = GalaxyMapGraph.DEFAULT_SECTOR_ID
 )
 
 data class MissionSnapshot(
@@ -1003,6 +1004,10 @@ data class HudSnapshot(
     val autopilotTargetX: Int = 0,
     val autopilotTargetY: Int = 0,
     val isTacticalMapOpen: Boolean = false,
+    val isGalaxyMapOpen: Boolean = false,
+    val currentSectorId: String = GalaxyMapGraph.DEFAULT_SECTOR_ID,
+    val plottedRoute: List<String> = emptyList(),
+    val nextRouteHopSectorId: String? = null,
     val playerHp: Int = ShipClass.INTERCEPTOR.baseHull.toInt(),
     val playerMaxHp: Int = ShipClass.INTERCEPTOR.baseHull.toInt(),
     val playerShield: Int = (GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus).toInt(),
@@ -1011,7 +1016,8 @@ data class HudSnapshot(
     val coordY: Int = 0,
     val activeMap: GameMap = GameMap.MAIN_MAP,
     val isNearJumpGate: Boolean = false,
-    val jumpGateLabel: String = "GATE: X-1",
+    val jumpGateLabel: String = "GATE: 1-1",
+    val nearestJumpTargetId: String? = null,
     val pilotName: String? = null,
     val pilotCompany: PilotCompany? = null,
     val currentZone: SpaceZone = SpaceZone.SAFE_ZONE,

@@ -158,6 +158,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun openTacticalMap() {
+        engine.openTacticalMap()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
     fun toggleTacticalMap() {
         engine.toggleTacticalMap()
         _hudState.value = engine.buildHudSnapshot()
@@ -166,6 +171,37 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun closeTacticalMap() {
         engine.closeTacticalMap()
         _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun openGalaxyMap() {
+        engine.openGalaxyMap()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun closeGalaxyMap() {
+        engine.closeGalaxyMap()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun toggleGalaxyMap() {
+        engine.toggleGalaxyMap()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun setPlottedRoute(route: List<String>) {
+        engine.setPlottedRoute(route)
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun clearPlottedRoute() {
+        engine.clearPlottedRoute()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun engageAutopilotToNextRoutePortal() {
+        if (engine.engageAutopilotToNextRoutePortal()) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
     }
 
     fun setAutopilotTarget(worldX: Float, worldY: Float) {

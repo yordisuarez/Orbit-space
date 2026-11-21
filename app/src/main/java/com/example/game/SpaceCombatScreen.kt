@@ -121,6 +121,7 @@ fun SpaceCombatScreen(
 
     BackHandler(enabled = hud.isAlive) {
         when {
+            hud.isGalaxyMapOpen -> viewModel.closeGalaxyMap()
             hud.isTacticalMapOpen -> viewModel.closeTacticalMap()
             hud.isHangarOpen -> viewModel.closeHangar()
             else -> viewModel.togglePause()
@@ -164,6 +165,7 @@ fun SpaceCombatScreen(
             TopTacticalHud(
                 hud = hud,
                 onOpenHangar = { viewModel.openHangar() },
+                onOpenGalaxyMap = { viewModel.toggleGalaxyMap() },
                 onToggleConfig = { viewModel.toggleConfig() },
                 onSelectFormation = { viewModel.selectOwnedFormationFromHud(it) },
                 onCancelAutopilot = { viewModel.cancelAutopilot() },
@@ -195,6 +197,7 @@ fun SpaceCombatScreen(
                 if (hud.isNearJumpGate) {
                     JumpGateButton(
                         gateLabel = hud.jumpGateLabel,
+                        targetSectorId = hud.nearestJumpTargetId,
                         onJump = { viewModel.triggerJumpGate() },
                         modifier = Modifier.padding(bottom = 14.dp)
                     )
@@ -230,7 +233,20 @@ fun SpaceCombatScreen(
                 engine = engine,
                 frameTick = frameTick,
                 onSetAutopilot = { wx, wy -> viewModel.setAutopilotTarget(wx, wy) },
+                onOpenGalaxyMap = { viewModel.openGalaxyMap() },
                 onClose = { viewModel.closeTacticalMap() }
+            )
+        }
+
+        if (hud.isGalaxyMapOpen && hud.isAlive && !hud.isHangarOpen && !hud.isPaused) {
+            GalaxyMapOverlay(
+                currentSectorId = hud.currentSectorId,
+                plottedRoute = hud.plottedRoute,
+                onPlotRoute = { viewModel.setPlottedRoute(it) },
+                onClearRoute = { viewModel.clearPlottedRoute() },
+                onEngageAutopilotToNextGate = { viewModel.engageAutopilotToNextRoutePortal() },
+                onSwitchToLocalMap = { viewModel.openTacticalMap() },
+                onClose = { viewModel.closeGalaxyMap() }
             )
         }
 

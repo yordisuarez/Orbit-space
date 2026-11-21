@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game/dark_orbit_game.dart';
+import 'ui/galaxy_map_screen.dart';
 import 'ui/hangar_overlay.dart';
 import 'ui/intro_onboarding_screens.dart';
 import 'ui/tactical_map_overlay.dart';
@@ -205,6 +206,10 @@ class _DarkOrbitAppState extends State<DarkOrbitApp> {
               DarkOrbitGame.tacticalMapOverlayId:
                   (BuildContext context, DarkOrbitGame g) {
                 return TacticalMapOverlay(game: g);
+              },
+              DarkOrbitGame.galaxyMapOverlayId:
+                  (BuildContext context, DarkOrbitGame g) {
+                return GalaxyMapScreen(game: g);
               },
             },
           ),

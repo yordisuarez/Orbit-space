@@ -8,8 +8,10 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'galaxy_map_data.dart';
 import 'game_models.dart';
 
+export 'galaxy_map_data.dart';
 export 'game_models.dart';
 
 class DarkOrbitGame extends FlameGame with TapCallbacks {
@@ -21,6 +23,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
   static const String hangarOverlayId = 'hangar';
   static const String tacticalMapOverlayId = 'tactical_map';
+  static const String galaxyMapOverlayId = 'galaxy_map';
   static const String savePrefsKey = 'dark_orbit_mobile_save_v2';
   static const String pilotNamePrefsKey = 'pilotName';
   static const String companyIdPrefsKey = 'companyId';
@@ -52,6 +55,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   late FormationButtonComponent formationButton;
   late FormationSubmenuComponent formationSubmenu;
   late HangarButtonComponent hangarButton;
+  late GalaxyMapButtonComponent galaxyMapButton;
   late AutopilotBadgeComponent autopilotBadge;
   late MissionHudComponent missionHud;
   late MinimapComponent minimap;
@@ -103,9 +107,20 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   int kills = 0;
   double elapsedTime = 0.0;
 
-  // Jump Gate & Active Map (Main Circular Map vs Classic Square MAP X-1)
-  GameMap activeMap = GameMap.mainMap;
+  // 25-Sector Galactic Map & Multi-Portal Navigation State
+  String currentSectorId = GalaxyMapGraph.defaultSectorId;
+  List<SectorPortal> activePortals = GalaxyMapGraph.portalsForSector(
+    GalaxyMapGraph.defaultSectorId,
+  );
+  List<String> plottedRoute = <String>[];
   double warpFlashTimer = 0.0;
+
+  SectorNode get currentSector => GalaxyMapGraph.sectorOf(currentSectorId);
+  double get activeMapSize => currentSector.mapSize;
+  String? get nextRouteHopSectorId =>
+      (plottedRoute.length >= 2 && plottedRoute.first == currentSectorId)
+          ? plottedRoute[1]
+          : null;
 
   ShipClassSpec get activeShipSpec => ShipClassCatalog.of(activeShipClass);
   DroneFormationSpec get activeFormationSpec =>
@@ -217,41 +232,57 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
         currentMissionProgress >= m.targetCount;
   }
 
-  Vector2 get activeSafeZoneCenter => activeMap == GameMap.mapX1
-      ? Vector2(GameConstants.mapX1SafeZoneX, GameConstants.mapX1SafeZoneY)
-      : Vector2.zero();
+  Vector2 get activeSafeZoneCenter =>
+      Vector2(activeMapSize * 0.5, activeMapSize * 0.5);
 
-  double get activeSafeZoneRadius => activeMap == GameMap.mapX1
-      ? GameConstants.mapX1SafeZoneRadius
-      : GameConstants.safeZoneRadius;
+  double get activeSafeZoneRadius =>
+      currentSector.hasCentralSafeZone ? currentSector.safeZoneRadius : 0.0;
 
-  Vector2 get activeJumpGatePosition => activeMap == GameMap.mapX1
-      ? Vector2(GameConstants.mapX1SafeZoneX, GameConstants.mapX1SafeZoneY)
-      : Vector2(GameConstants.mainJumpGateX, GameConstants.mainJumpGateY);
+  bool isPointInActiveSafeZone(Vector2 pt) {
+    if (currentSector.isEntireSectorSafe) return true;
+    if (!currentSector.hasCentralSafeZone) return false;
+    return pt.distanceTo(activeSafeZoneCenter) <= activeSafeZoneRadius;
+  }
 
-  bool isPointInActiveSafeZone(Vector2 pt) =>
-      pt.distanceTo(activeSafeZoneCenter) <= activeSafeZoneRadius;
+  SectorPortal? get nearestJumpPortal {
+    SectorPortal? best;
+    double bestDist = GameConstants.jumpGateInteractRadius;
+    for (final SectorPortal portal in activePortals) {
+      final double dx = player.position.x - portal.worldX;
+      final double dy = player.position.y - portal.worldY;
+      final double d = sqrt(dx * dx + dy * dy);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = portal;
+      }
+    }
+    return best;
+  }
 
-  bool get isPlayerNearJumpGate =>
-      player.position.distanceTo(activeJumpGatePosition) <=
-      GameConstants.jumpGateInteractRadius;
+  bool get isPlayerNearJumpGate => nearestJumpPortal != null;
 
   bool isOutOfActiveMapBounds(Vector2 pt) {
-    if (activeMap == GameMap.mapX1) {
-      const double pad = GameConstants.mapX1RadiationOuterBuffer + 180.0;
-      return pt.x < -pad ||
-          pt.x > GameConstants.mapX1Size + pad ||
-          pt.y < -pad ||
-          pt.y > GameConstants.mapX1Size + pad;
-    }
-    return pt.length > GameConstants.mapRadius + 100.0;
+    const double pad = GameConstants.mapX1RadiationOuterBuffer + 180.0;
+    return pt.x < -pad ||
+        pt.x > activeMapSize + pad ||
+        pt.y < -pad ||
+        pt.y > activeMapSize + pad;
   }
 
   SpaceZone get currentZone {
-    if (activeMap == GameMap.mapX1) {
-      return player.inSafeZone ? SpaceZone.safeZone : SpaceZone.zone1Alpha;
+    if (player.inSafeZone) return SpaceZone.safeZone;
+    switch (currentSector.zoneType) {
+      case ZoneType.capitalCity:
+      case ZoneType.safeZone:
+      case ZoneType.intermediateZone:
+        return SpaceZone.zone1Alpha;
+      case ZoneType.moderateZone:
+        return SpaceZone.zone2Beta;
+      case ZoneType.highRiskYellowRing:
+        return SpaceZone.zone3Gamma;
+      case ZoneType.nucleus:
+        return SpaceZone.zone4Omega;
     }
-    return zoneForDistance(player.position.length);
   }
 
   static SpaceZone zoneForDistance(double dist) {
@@ -312,9 +343,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   }
 
   @override
-  Color backgroundColor() => activeMap == GameMap.mapX1
-      ? const Color(0xFF07061C)
-      : const Color(0xFF040711);
+  Color backgroundColor() => currentSector.zoneType.spaceBackgroundColor;
 
   @override
   Future<void> onLoad() async {
@@ -322,11 +351,15 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 
     await world.add(SpaceMapComponent());
 
-    player = PlayerShipComponent(position: Vector2.zero());
+    currentSectorId = GalaxyMapGraph.homeCityForCompany(pilotCompany);
+    activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
+    player = PlayerShipComponent(position: activeSafeZoneCenter.clone());
     vantFleet = VantFleetComponent();
     _initStarterState();
     await _loadSavedGame();
+    activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
     player
+      ..position.setFrom(activeSafeZoneCenter)
       ..hp = currentMaxHull
       ..shield = currentMaxShield;
     _snapVantsToFormation();
@@ -389,6 +422,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     formationButton = FormationButtonComponent();
     formationSubmenu = FormationSubmenuComponent();
     hangarButton = HangarButtonComponent();
+    galaxyMapButton = GalaxyMapButtonComponent();
     autopilotBadge = AutopilotBadgeComponent();
     missionHud = MissionHudComponent();
     minimap = MinimapComponent();
@@ -404,6 +438,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       configButton,
       formationButton,
       hangarButton,
+      galaxyMapButton,
       autopilotBadge,
       missionHud,
       minimap,
@@ -513,6 +548,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
             .toList(),
         'pilotName': pilotName,
         'companyId': pilotCompanySpec?.id,
+        'currentSectorId': currentSectorId,
       };
       await prefs.setString(savePrefsKey, jsonEncode(payload));
       if (pilotName != null &&
@@ -786,6 +822,15 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
       final MissionSpec? m = activeMission;
       final int rawProg = (data['currentMissionProgress'] as int?) ?? 0;
       currentMissionProgress = m != null ? rawProg.clamp(0, m.targetCount) : 0;
+
+      final String? savedSector = data['currentSectorId'] as String?;
+      if (savedSector != null && galaxyMapData.containsKey(savedSector)) {
+        currentSectorId = savedSector;
+      } else {
+        currentSectorId = GalaxyMapGraph.homeCityForCompany(pilotCompany);
+      }
+      activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
+      plottedRoute = <String>[];
     } catch (_) {
       // Keep starter state on corrupt save
     }
@@ -803,10 +848,12 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     pilotName = null;
     pilotCompany = null;
     _initStarterState();
-    activeMap = GameMap.mainMap;
+    currentSectorId = GalaxyMapGraph.defaultSectorId;
+    activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
+    plottedRoute = <String>[];
     warpFlashTimer = 0.0;
     player
-      ..position.setZero()
+      ..position.setFrom(activeSafeZoneCenter)
       ..hp = currentMaxHull
       ..shield = currentMaxShield
       ..rocketCooldown = 0.0;
@@ -821,6 +868,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     camera.follow(player, snap: true);
     overlays.remove(hangarOverlayId);
     overlays.remove(tacticalMapOverlayId);
+    overlays.remove(galaxyMapOverlayId);
     resumeEngine();
     onResetToIntro?.call();
   }
@@ -846,55 +894,143 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   }
 
   void _populateActiveMapEntities() {
-    if (activeMap == GameMap.mapX1) {
-      // Classic mix of Scouts, Hunters, and Destroyers with existing 20% BOSS chance
+    final SectorNode sector = currentSector;
+    // Capital Cities (C1, C2, C3) are full Safe Zones (Base, Market, Vault) with zero hostile aliens
+    if (sector.isEntireSectorSafe) {
       for (int i = 0; i < 16; i++) {
-        spawnAlien(AlienTier.scout, minDistFromPlayer: 680.0);
-      }
-      for (int i = 0; i < 14; i++) {
-        spawnAlien(AlienTier.hunter, minDistFromPlayer: 720.0);
-      }
-      for (int i = 0; i < 10; i++) {
-        spawnAlien(AlienTier.destroyer, minDistFromPlayer: 760.0);
-      }
-      for (int i = 0; i < GameConstants.mapX1BonusBoxCount; i++) {
         spawnBonusBox();
       }
-    } else {
-      for (final AlienTier tier in AlienTier.values) {
-        final AlienTierSpec spec = AlienTierCatalog.of(tier);
-        for (int i = 0; i < spec.activeCount; i++) {
-          spawnAlien(tier, minDistFromPlayer: 520.0);
+      return;
+    }
+
+    switch (sector.zoneType) {
+      case ZoneType.capitalCity:
+        break;
+      case ZoneType.safeZone:
+        for (int i = 0; i < 20; i++) {
+          spawnAlien(AlienTier.scout, minDistFromPlayer: 640.0);
         }
-      }
-      for (int i = 0; i < GameConstants.bonusBoxCount; i++) {
-        spawnBonusBox();
-      }
+        for (int i = 0; i < 8; i++) {
+          spawnAlien(AlienTier.hunter, minDistFromPlayer: 760.0);
+        }
+        for (int i = 0; i < 42; i++) {
+          spawnBonusBox();
+        }
+        break;
+      case ZoneType.intermediateZone:
+        for (int i = 0; i < 18; i++) {
+          spawnAlien(AlienTier.scout, minDistFromPlayer: 640.0);
+        }
+        for (int i = 0; i < 16; i++) {
+          spawnAlien(AlienTier.hunter, minDistFromPlayer: 700.0);
+        }
+        for (int i = 0; i < 46; i++) {
+          spawnBonusBox();
+        }
+        break;
+      case ZoneType.moderateZone:
+        for (int i = 0; i < 16; i++) {
+          spawnAlien(AlienTier.hunter, minDistFromPlayer: 700.0);
+        }
+        for (int i = 0; i < 16; i++) {
+          spawnAlien(AlienTier.destroyer, minDistFromPlayer: 760.0);
+        }
+        for (int i = 0; i < 50; i++) {
+          spawnBonusBox();
+        }
+        break;
+      case ZoneType.highRiskYellowRing:
+        for (int i = 0; i < 16; i++) {
+          spawnAlien(AlienTier.destroyer, minDistFromPlayer: 760.0);
+        }
+        for (int i = 0; i < 12; i++) {
+          spawnAlien(AlienTier.dreadnoughtBoss, minDistFromPlayer: 840.0);
+        }
+        for (int i = 0; i < 58; i++) {
+          spawnBonusBox();
+        }
+        break;
+      case ZoneType.nucleus:
+        // Large 22,000 x 22,000 High-Risk sector with Central Black Market Safe Zone
+        for (int i = 0; i < 22; i++) {
+          spawnAlien(AlienTier.destroyer, minDistFromPlayer: 820.0);
+        }
+        for (int i = 0; i < 18; i++) {
+          spawnAlien(AlienTier.dreadnoughtBoss, minDistFromPlayer: 900.0);
+        }
+        for (int i = 0; i < 80; i++) {
+          spawnBonusBox();
+        }
+        break;
     }
   }
 
   void triggerJumpGate() {
-    if (!isPlayerNearJumpGate) return;
+    final SectorPortal? portal = nearestJumpPortal;
+    if (portal == null) return;
+    jumpToSector(portal.targetSectorId, arrivedFromSectorId: currentSectorId);
+  }
 
-    // Cancel Autopilot, combat lock, auto-fire, and close Tactical Map
+  void jumpToSector(String targetSectorId, {String? arrivedFromSectorId}) {
+    if (!galaxyMapData.containsKey(targetSectorId)) return;
+
+    // Cancel Autopilot, combat lock, auto-fire, and close map overlays
     autopilotTarget = null;
     lockedTarget = null;
     autoFireEnabled = false;
     overlays.remove(tacticalMapOverlayId);
+    overlays.remove(galaxyMapOverlayId);
 
-    activeMap = activeMap == GameMap.mainMap ? GameMap.mapX1 : GameMap.mainMap;
+    final String prevId = arrivedFromSectorId ?? currentSectorId;
+    currentSectorId = targetSectorId;
+    activePortals = GalaxyMapGraph.portalsForSector(currentSectorId);
     warpFlashTimer = GameConstants.warpFlashDurationSec;
 
-    if (activeMap == GameMap.mapX1) {
-      player.position.setValues(
-        GameConstants.mapX1SpawnX,
-        GameConstants.mapX1SpawnY,
-      );
-      player.angle = 0.785398;
-    } else {
-      player.position.setZero();
-      player.angle = -pi * 0.5;
+    // Advance or recalculate active plotted BFS route
+    if (plottedRoute.length >= 2) {
+      if (plottedRoute.last == currentSectorId) {
+        plottedRoute = <String>[];
+      } else if (plottedRoute[1] == currentSectorId) {
+        plottedRoute = plottedRoute.sublist(1);
+      } else {
+        plottedRoute = GalaxyMapGraph.findShortestRoute(
+          currentSectorId,
+          plottedRoute.last,
+        );
+      }
     }
+
+    // Arrive beside the matching return portal (offset inward slightly) or at city base center
+    final SectorNode dest = currentSector;
+    if (dest.isCapitalCity) {
+      player.position.setFrom(activeSafeZoneCenter);
+      player.angle = -pi * 0.5;
+    } else {
+      SectorPortal? arrivalPortal;
+      for (final SectorPortal p in activePortals) {
+        if (p.targetSectorId == prevId) {
+          arrivalPortal = p;
+          break;
+        }
+      }
+      if (arrivalPortal != null) {
+        final double cx = dest.mapSize * 0.5;
+        final double cy = dest.mapSize * 0.5;
+        final double dx = cx - arrivalPortal.worldX;
+        final double dy = cy - arrivalPortal.worldY;
+        final double dist = max(1.0, sqrt(dx * dx + dy * dy));
+        // Offset 150 units inward so the ship arrives clear of immediate bounce-back
+        player.position.setValues(
+          arrivalPortal.worldX + (dx / dist) * 150.0,
+          arrivalPortal.worldY + (dy / dist) * 150.0,
+        );
+        player.angle = atan2(dy, dx);
+      } else {
+        player.position.setFrom(activeSafeZoneCenter);
+        player.angle = -pi * 0.5;
+      }
+    }
+
     player.thrustFactor = 0.0;
     player.isTakingZoneRadiation = false;
     player.requiredChipWarning = null;
@@ -904,20 +1040,21 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     _populateActiveMapEntities();
     _snapVantsToFormation();
     camera.follow(player, snap: true);
+    saveGame();
 
     world.add(
       ShockwaveRingComponent(
         position: player.position.clone(),
-        maxRadius: 150.0,
+        maxRadius: 155.0,
         duration: 0.45,
-        color: const Color(0xFF00E5FF),
+        color: dest.nodeColor,
       ),
     );
     spawnFloatingText(
       position: player.position + Vector2(0.0, -activeShipSpec.hullRadius - 32.0),
-      text: 'JUMPED TO ${activeMap.displayName}',
-      color: const Color(0xFF00E5FF),
-      fontSize: 15.0,
+      text: 'SECTOR ${dest.id} • ${dest.zoneType.shortLabel}',
+      color: dest.nodeColor,
+      fontSize: 14.5,
     );
   }
 
@@ -946,6 +1083,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   void openHangar() {
     isFormationMenuOpen = false;
     overlays.remove(tacticalMapOverlayId);
+    overlays.remove(galaxyMapOverlayId);
     pauseEngine();
     overlays.add(hangarOverlayId);
   }
@@ -960,6 +1098,7 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   void openTacticalMap() {
     if (overlays.isActive(hangarOverlayId)) return;
     isFormationMenuOpen = false;
+    overlays.remove(galaxyMapOverlayId);
     overlays.add(tacticalMapOverlayId);
   }
 
@@ -975,26 +1114,48 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     }
   }
 
-  void setAutopilotTarget(double worldX, double worldY) {
-    double tx = worldX;
-    double ty = worldY;
-    if (activeMap == GameMap.mapX1) {
-      tx = tx.clamp(
-        GameConstants.mapX1AutopilotMin,
-        GameConstants.mapX1AutopilotMax,
-      );
-      ty = ty.clamp(
-        GameConstants.mapX1AutopilotMin,
-        GameConstants.mapX1AutopilotMax,
-      );
+  void openGalaxyMap() {
+    if (overlays.isActive(hangarOverlayId)) return;
+    isFormationMenuOpen = false;
+    overlays.remove(tacticalMapOverlayId);
+    overlays.add(galaxyMapOverlayId);
+  }
+
+  void closeGalaxyMap() {
+    overlays.remove(galaxyMapOverlayId);
+  }
+
+  void toggleGalaxyMap() {
+    if (overlays.isActive(galaxyMapOverlayId)) {
+      closeGalaxyMap();
     } else {
-      final double dist = sqrt(tx * tx + ty * ty);
-      if (dist > GameConstants.autopilotMaxTargetRadius && dist > 0.001) {
-        final double s = GameConstants.autopilotMaxTargetRadius / dist;
-        tx *= s;
-        ty *= s;
+      openGalaxyMap();
+    }
+  }
+
+  void setPlottedRoute(List<String> route) {
+    plottedRoute = List<String>.unmodifiable(route);
+  }
+
+  void clearPlottedRoute() {
+    plottedRoute = <String>[];
+  }
+
+  bool engageAutopilotToNextRoutePortal() {
+    final String? nextHop = nextRouteHopSectorId;
+    if (nextHop == null) return false;
+    for (final SectorPortal portal in activePortals) {
+      if (portal.targetSectorId == nextHop) {
+        setAutopilotTarget(portal.worldX, portal.worldY);
+        return true;
       }
     }
+    return false;
+  }
+
+  void setAutopilotTarget(double worldX, double worldY) {
+    final double tx = worldX.clamp(200.0, activeMapSize - 200.0);
+    final double ty = worldY.clamp(200.0, activeMapSize - 200.0);
     autopilotTarget = Vector2(tx, ty);
   }
 
@@ -1776,41 +1937,40 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
     return Vector2(cos(angle) * r, sin(angle) * r);
   }
 
-  Vector2 randomPointInX1Playable({
+  Vector2 randomPointInActiveSector({
     required double margin,
     required double safeZoneBuffer,
   }) {
+    final double mapSize = activeMapSize;
     final double minCoord = margin;
-    final double maxCoord = GameConstants.mapX1Size - margin;
-    final double minSafeDist = GameConstants.mapX1SafeZoneRadius + safeZoneBuffer;
+    final double maxCoord = max(margin + 100.0, mapSize - margin);
+    final Vector2 safeCenter = activeSafeZoneCenter;
+    final double minSafeDist = activeSafeZoneRadius + safeZoneBuffer;
     for (int i = 0; i < 24; i++) {
       final double rx = minCoord + rng.nextDouble() * (maxCoord - minCoord);
       final double ry = minCoord + rng.nextDouble() * (maxCoord - minCoord);
-      final double dx = rx - GameConstants.mapX1SafeZoneX;
-      final double dy = ry - GameConstants.mapX1SafeZoneY;
+      if (!currentSector.hasCentralSafeZone || currentSector.isEntireSectorSafe) {
+        return Vector2(rx, ry);
+      }
+      final double dx = rx - safeCenter.x;
+      final double dy = ry - safeCenter.y;
       if (sqrt(dx * dx + dy * dy) >= minSafeDist) {
         return Vector2(rx, ry);
       }
     }
-    return Vector2(GameConstants.mapX1Size * 0.5, GameConstants.mapX1Size * 0.5);
+    return Vector2(maxCoord * 0.78, maxCoord * 0.78);
   }
 
   void spawnAlien(AlienTier tier, {double minDistFromPlayer = 480.0}) {
+    if (currentSector.isEntireSectorSafe) return;
     final AlienTierSpec spec = AlienTierCatalog.of(tier);
     final bool isBoss = rng.nextDouble() < GameConstants.bossSpawnChance;
     final double effRadius =
         isBoss ? spec.radius * GameConstants.bossSizeMultiplier : spec.radius;
-    Vector2 pickPos() {
-      if (activeMap == GameMap.mapX1) {
-        return randomPointInX1Playable(
+    Vector2 pickPos() => randomPointInActiveSector(
           margin: 280.0 + effRadius,
-          safeZoneBuffer: 200.0 + effRadius,
+          safeZoneBuffer: 220.0 + effRadius,
         );
-      }
-      final double inner = spec.minRadius + effRadius + 50.0;
-      final double outer = spec.maxRadius - effRadius - 50.0;
-      return randomPointInAnnulus(inner, outer);
-    }
 
     Vector2 pos = pickPos();
     for (int i = 0; i < 16; i++) {
@@ -1830,54 +1990,36 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   }
 
   void spawnBonusBox() {
-    final Vector2 pos;
+    final Vector2 pos = randomPointInActiveSector(
+      margin: 260.0,
+      safeZoneBuffer: 140.0,
+    );
+    final int tier = currentSector.maxTier;
     final int reward;
     final int xpReward;
     final double shieldAmount;
-
-    if (activeMap == GameMap.mapX1) {
-      pos = randomPointInX1Playable(margin: 260.0, safeZoneBuffer: 120.0);
-      final double dx = pos.x - GameConstants.mapX1SafeZoneX;
-      final double dy = pos.y - GameConstants.mapX1SafeZoneY;
-      final double distCorner = sqrt(dx * dx + dy * dy);
-      if (distCorner < 5000.0) {
-        reward = (5 + rng.nextInt(6)) * 25;
-        xpReward = 20;
-        shieldAmount = 50.0;
-      } else if (distCorner < 10500.0) {
-        reward = (9 + rng.nextInt(8)) * 25;
-        xpReward = 40;
-        shieldAmount = 80.0;
-      } else {
-        reward = (14 + rng.nextInt(10)) * 25;
-        xpReward = 65;
-        shieldAmount = 110.0;
-      }
-    } else {
-      pos = randomPointInAnnulus(
-        GameConstants.safeZoneRadius + 90.0,
-        GameConstants.mapRadius - 160.0,
-      );
-      final SpaceZone zone = zoneForDistance(pos.length);
-      switch (zone) {
-        case SpaceZone.zone1Alpha:
-        case SpaceZone.safeZone:
-          reward = (4 + rng.nextInt(5)) * 25;
-          xpReward = 15;
-          shieldAmount = 40.0;
-        case SpaceZone.zone2Beta:
-          reward = (8 + rng.nextInt(8)) * 25;
-          xpReward = 35;
-          shieldAmount = 70.0;
-        case SpaceZone.zone3Gamma:
-          reward = (16 + rng.nextInt(11)) * 25;
-          xpReward = 70;
-          shieldAmount = 110.0;
-        case SpaceZone.zone4Omega:
-          reward = (28 + rng.nextInt(17)) * 25;
-          xpReward = 140;
-          shieldAmount = 160.0;
-      }
+    switch (tier) {
+      case 1:
+        reward = (4 + rng.nextInt(5)) * 25;
+        xpReward = 15;
+        shieldAmount = 40.0;
+        break;
+      case 2:
+        reward = (6 + rng.nextInt(6)) * 25;
+        xpReward = 25;
+        shieldAmount = 60.0;
+        break;
+      case 3:
+      case 4:
+        reward = (12 + rng.nextInt(9)) * 25;
+        xpReward = 55;
+        shieldAmount = 95.0;
+        break;
+      default:
+        reward = (26 + rng.nextInt(16)) * 25;
+        xpReward = 130;
+        shieldAmount = 150.0;
+        break;
     }
     final bool isShieldBox = rng.nextDouble() < 0.24;
     final LootBoxComponent box = LootBoxComponent(
@@ -2057,34 +2199,22 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
 // SPACE MAP (8000-Radius Circular Map, 4 Concentric Zone Rings & Central Base)
 // =============================================================================
 class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
-  final List<_StarData> _stars = <_StarData>[];
-  final List<_StarData> _x1Stars = <_StarData>[];
+  final List<_StarData> _sectorStars = <_StarData>[];
 
   @override
   Future<void> onLoad() async {
     final Random starRng = Random(42019);
-    for (int i = 0; i < GameConstants.starCount; i++) {
-      final double angle = starRng.nextDouble() * 2.0 * pi;
-      final double radius =
-          sqrt(starRng.nextDouble()) * (GameConstants.mapRadius - 30.0);
-      _stars.add(
-        _StarData(
-          position: Offset(cos(angle) * radius, sin(angle) * radius),
-          radius: 0.9 + starRng.nextDouble() * 2.0,
-          alpha: 0.28 + starRng.nextDouble() * 0.7,
-        ),
-      );
-    }
-    final Random x1Rng = Random(77411);
-    for (int i = 0; i < GameConstants.mapX1StarCount; i++) {
-      _x1Stars.add(
+    // Cover up to 22,000 x 22,000 (Nucleus large sector span)
+    const double maxSpan = 22000.0;
+    for (int i = 0; i < 2400; i++) {
+      _sectorStars.add(
         _StarData(
           position: Offset(
-            x1Rng.nextDouble() * GameConstants.mapX1Size,
-            x1Rng.nextDouble() * GameConstants.mapX1Size,
+            starRng.nextDouble() * maxSpan,
+            starRng.nextDouble() * maxSpan,
           ),
-          radius: 0.9 + x1Rng.nextDouble() * 2.0,
-          alpha: 0.28 + x1Rng.nextDouble() * 0.7,
+          radius: 0.9 + starRng.nextDouble() * 2.0,
+          alpha: 0.28 + starRng.nextDouble() * 0.7,
         ),
       );
     }
@@ -2092,19 +2222,16 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
 
   @override
   void render(Canvas canvas) {
-    final bool isMapX1 = gameRef.activeMap == GameMap.mapX1;
-    const double maxR = GameConstants.mapRadius;
+    final SectorNode sector = gameRef.currentSector;
+    final double mapSize = sector.mapSize;
     final Vector2 cam = gameRef.camera.viewfinder.position;
     final double halfW = gameRef.size.x * 0.5 + 80.0;
     final double halfH = gameRef.size.y * 0.5 + 80.0;
     final double halfDiag = sqrt(halfW * halfW + halfH * halfH);
-    final double camDist = cam.length;
-    final double minVisR = max(0.0, camDist - halfDiag - 60.0);
-    final double maxVisR = camDist + halfDiag + 60.0;
 
-    final List<_StarData> activeStars = isMapX1 ? _x1Stars : _stars;
     final Paint starPaint = Paint();
-    for (final _StarData star in activeStars) {
+    for (final _StarData star in _sectorStars) {
+      if (star.position.dx > mapSize || star.position.dy > mapSize) continue;
       if ((star.position.dx - cam.x).abs() > halfW ||
           (star.position.dy - cam.y).abs() > halfH) {
         continue;
@@ -2113,103 +2240,27 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       canvas.drawCircle(star.position, star.radius, starPaint);
     }
 
-    if (isMapX1) {
-      _drawSquareX1GridAndBorder(
-        canvas,
-        cam.x - halfW,
-        cam.x + halfW,
-        cam.y - halfH,
-        cam.y + halfH,
-      );
-      final double dxSafe = cam.x - GameConstants.mapX1SafeZoneX;
-      final double dySafe = cam.y - GameConstants.mapX1SafeZoneY;
+    _drawSquareSectorGridAndBorder(
+      canvas,
+      mapSize,
+      sector.nodeColor,
+      cam.x - halfW,
+      cam.x + halfW,
+      cam.y - halfH,
+      cam.y + halfH,
+    );
+
+    if (sector.hasCentralSafeZone) {
+      final Vector2 safeCenter = gameRef.activeSafeZoneCenter;
+      final double dxSafe = cam.x - safeCenter.x;
+      final double dySafe = cam.y - safeCenter.y;
       if (sqrt(dxSafe * dxSafe + dySafe * dySafe) <=
-          GameConstants.mapX1SafeZoneRadius + halfDiag + 140.0) {
-        _drawX1CornerSafeZone(canvas);
-      }
-    } else {
-      final Paint gridPaint = Paint()
-        ..color = const Color(0x1438BDF8)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
-      for (double r = 2500.0; r < maxR; r += 2500.0) {
-        if (r == GameConstants.zone1MaxRadius ||
-            r == GameConstants.zone2MaxRadius ||
-            r == GameConstants.zone3MaxRadius) {
-          continue;
-        }
-        if (r >= minVisR && r <= maxVisR) {
-          canvas.drawCircle(Offset.zero, r, gridPaint);
-        }
-      }
-      for (int i = 0; i < 8; i++) {
-        final double a = i * pi * 0.25;
-        canvas.drawLine(
-          Offset.zero,
-          Offset(cos(a) * maxR, sin(a) * maxR),
-          gridPaint,
-        );
-      }
-
-      if (GameConstants.zone1MaxRadius >= minVisR &&
-          GameConstants.zone1MaxRadius <= maxVisR) {
-        _drawDashedZoneRing(
-          canvas,
-          GameConstants.zone1MaxRadius,
-          const Color(0xFF4ADE80),
-        );
-      }
-      if (GameConstants.zone2MaxRadius >= minVisR &&
-          GameConstants.zone2MaxRadius <= maxVisR) {
-        _drawDashedZoneRing(
-          canvas,
-          GameConstants.zone2MaxRadius,
-          const Color(0xFFFACC15),
-        );
-      }
-      if (GameConstants.zone3MaxRadius >= minVisR &&
-          GameConstants.zone3MaxRadius <= maxVisR) {
-        _drawDashedZoneRing(
-          canvas,
-          GameConstants.zone3MaxRadius,
-          const Color(0xFFFB923C),
-        );
-      }
-
-      if (camDist <= GameConstants.safeZoneRadius + halfDiag + 140.0) {
-        _drawSafeZoneStation(canvas);
-      }
-
-      if (camDist + halfDiag >= maxR - 160.0) {
-        final double pulse = 0.65 + 0.35 * sin(gameRef.elapsedTime * 4.5);
-        canvas.drawCircle(
-          Offset.zero,
-          maxR + 240.0,
-          Paint()
-            ..color = const Color(0x2AE11D48)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 480.0,
-        );
-        canvas.drawCircle(
-          Offset.zero,
-          maxR,
-          Paint()
-            ..color = const Color(0xFFFF2E4C).withOpacity(0.28 * pulse)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 22.0,
-        );
-        canvas.drawCircle(
-          Offset.zero,
-          maxR,
-          Paint()
-            ..color = const Color(0xFFFF2E4C).withOpacity(0.86 + 0.14 * pulse)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 4.5,
-        );
+          sector.safeZoneRadius + halfDiag + 140.0) {
+        _drawSectorCentralSafeZone(canvas, sector, safeCenter);
       }
     }
 
-    _drawJumpGatePortal(canvas, cam, halfW, halfH);
+    _drawAllSectorPortals(canvas, cam, halfW, halfH);
 
     // World-space Autopilot faint dashed trajectory & pulsing waypoint crosshair
     final Vector2? ap = gameRef.autopilotTarget;
@@ -2267,125 +2318,15 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
     }
   }
 
-  void _drawDashedZoneRing(Canvas canvas, double radius, Color color) {
-    canvas.drawCircle(
-      Offset.zero,
-      radius,
-      Paint()
-        ..color = color.withOpacity(0.11)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 14.0,
-    );
-    final Paint dashPaint = Paint()
-      ..color = color.withOpacity(0.58)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.6;
-    const int segments = 120;
-    const double step = (2.0 * pi) / segments;
-    final Rect rect = Rect.fromCircle(center: Offset.zero, radius: radius);
-    for (int i = 0; i < segments; i++) {
-      canvas.drawArc(rect, i * step, step * 0.58, false, dashPaint);
-    }
-  }
-
-  void _drawSafeZoneStation(Canvas canvas) {
-    final double pulse = 0.7 + 0.3 * sin(gameRef.elapsedTime * 3.0);
-    const double safeR = GameConstants.safeZoneRadius;
-
-    canvas.drawCircle(
-      Offset.zero,
-      safeR,
-      Paint()..color = const Color(0x1400E5FF),
-    );
-    canvas.drawCircle(
-      Offset.zero,
-      safeR,
-      Paint()
-        ..color = const Color(0xFF00E5FF).withOpacity(0.24 * pulse)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 14.0,
-    );
-    canvas.drawCircle(
-      Offset.zero,
-      safeR,
-      Paint()
-        ..color = const Color(0xDD00E5FF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.0,
-    );
-
-    canvas.save();
-    canvas.rotate(gameRef.elapsedTime * 0.16);
-    canvas.drawCircle(
-      Offset.zero,
-      78.0,
-      Paint()
-        ..color = const Color(0xFF16243D)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 12.0,
-    );
-    canvas.drawCircle(
-      Offset.zero,
-      84.0,
-      Paint()
-        ..color = const Color(0xBB00E5FF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.8,
-    );
-    final Paint armPaint = Paint()
-      ..color = const Color(0xFF334155)
-      ..strokeWidth = 10.0
-      ..strokeCap = StrokeCap.round;
-    final Paint armAccent = Paint()
-      ..color = const Color(0xCC00E5FF)
-      ..strokeWidth = 2.0
-      ..strokeCap = StrokeCap.round;
-    for (int i = 0; i < 4; i++) {
-      final double a = i * pi * 0.5;
-      final Offset p1 = Offset(cos(a) * 34.0, sin(a) * 34.0);
-      final Offset p2 = Offset(cos(a) * 106.0, sin(a) * 106.0);
-      canvas.drawLine(p1, p2, armPaint);
-      canvas.drawLine(p1, p2, armAccent);
-      canvas.drawCircle(p2, 4.0, Paint()..color = const Color(0xFF00E5FF));
-    }
-    canvas.restore();
-
-    final Path hub = Path();
-    for (int i = 0; i < 8; i++) {
-      final double a = i * (2.0 * pi / 8.0) + pi / 8.0;
-      final double x = cos(a) * 42.0;
-      final double y = sin(a) * 42.0;
-      if (i == 0) {
-        hub.moveTo(x, y);
-      } else {
-        hub.lineTo(x, y);
-      }
-    }
-    hub.close();
-    canvas.drawPath(hub, Paint()..color = const Color(0xFF0F1C33));
-    canvas.drawPath(
-      hub,
-      Paint()
-        ..color = const Color(0xFF00E5FF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.2,
-    );
-    canvas.drawCircle(
-      Offset.zero,
-      12.0 * (0.9 + 0.1 * pulse),
-      Paint()..color = const Color(0xFF00E5FF),
-    );
-    canvas.drawCircle(Offset.zero, 5.0, Paint()..color = Colors.white);
-  }
-
-  void _drawSquareX1GridAndBorder(
+  void _drawSquareSectorGridAndBorder(
     Canvas canvas,
+    double mapSize,
+    Color accentColor,
     double minX,
     double maxX,
     double minY,
     double maxY,
   ) {
-    const double mapSize = GameConstants.mapX1Size;
     const double step = 1000.0;
 
     final double clipTop = max(0.0, minY);
@@ -2394,10 +2335,10 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
     final double clipRight = min(mapSize, maxX);
 
     final Paint minorGrid = Paint()
-      ..color = const Color(0x146366F1)
+      ..color = accentColor.withOpacity(0.08)
       ..strokeWidth = 1.0;
     final Paint majorGrid = Paint()
-      ..color = const Color(0x22818CF8)
+      ..color = accentColor.withOpacity(0.15)
       ..strokeWidth = 1.5;
 
     if (clipBottom > clipTop) {
@@ -2432,31 +2373,31 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
     final Paint radFill = Paint()..color = const Color(0x26FF1744);
     if (minY < 0.0) {
       canvas.drawRect(
-        const Rect.fromLTWH(-radBand, -radBand, mapSize + radBand * 2.0, radBand),
+        Rect.fromLTWH(-radBand, -radBand, mapSize + radBand * 2.0, radBand),
         radFill,
       );
     }
     if (maxY > mapSize) {
       canvas.drawRect(
-        const Rect.fromLTWH(-radBand, mapSize, mapSize + radBand * 2.0, radBand),
+        Rect.fromLTWH(-radBand, mapSize, mapSize + radBand * 2.0, radBand),
         radFill,
       );
     }
     if (minX < 0.0) {
       canvas.drawRect(
-        const Rect.fromLTWH(-radBand, 0.0, radBand, mapSize),
+        Rect.fromLTWH(-radBand, 0.0, radBand, mapSize),
         radFill,
       );
     }
     if (maxX > mapSize) {
       canvas.drawRect(
-        const Rect.fromLTWH(mapSize, 0.0, radBand, mapSize),
+        Rect.fromLTWH(mapSize, 0.0, radBand, mapSize),
         radFill,
       );
     }
 
     final double pulse = 0.65 + 0.35 * sin(gameRef.elapsedTime * 5.2);
-    const Rect borderRect = Rect.fromLTWH(0.0, 0.0, mapSize, mapSize);
+    final Rect borderRect = Rect.fromLTWH(0.0, 0.0, mapSize, mapSize);
     canvas.drawRect(
       borderRect,
       Paint()
@@ -2473,13 +2414,17 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
     );
   }
 
-  void _drawX1CornerSafeZone(Canvas canvas) {
-    const Offset safeCenter = Offset(
-      GameConstants.mapX1SafeZoneX,
-      GameConstants.mapX1SafeZoneY,
-    );
-    const double safeR = GameConstants.mapX1SafeZoneRadius;
+  void _drawSectorCentralSafeZone(
+    Canvas canvas,
+    SectorNode sector,
+    Vector2 safeWorld,
+  ) {
+    final Offset safeCenter = Offset(safeWorld.x, safeWorld.y);
+    final double safeR = sector.safeZoneRadius;
     final double pulse = 0.72 + 0.28 * sin(gameRef.elapsedTime * 3.0);
+    final Color ringColor = sector.isNucleus
+        ? const Color(0xFFFACC15)
+        : (sector.isCapitalCity ? sector.nodeColor : const Color(0xFF00E5FF));
 
     canvas.drawCircle(
       safeCenter,
@@ -2490,7 +2435,7 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       safeCenter,
       safeR,
       Paint()
-        ..color = const Color(0xFF00E5FF).withOpacity(0.20 * pulse)
+        ..color = ringColor.withOpacity(0.22 * pulse)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 14.0,
     );
@@ -2498,41 +2443,140 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       safeCenter,
       safeR,
       Paint()
-        ..color = const Color(0xCC00E5FF)
+        ..color = ringColor.withOpacity(0.85)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.0,
+        ..strokeWidth = 3.2,
+    );
+    if (sector.isNucleus) {
+      // Inner cyan safe-zone border inside Nucleus gold perimeter
+      canvas.drawCircle(
+        safeCenter,
+        safeR * 0.92,
+        Paint()
+          ..color = const Color(0xCC00E5FF)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0,
+      );
+    }
+
+    // Station hub at exact center
+    canvas.save();
+    canvas.translate(safeCenter.dx, safeCenter.dy);
+    canvas.rotate(gameRef.elapsedTime * 0.14);
+    final Paint armPaint = Paint()
+      ..color = const Color(0xFF1E293B)
+      ..strokeWidth = 10.0
+      ..strokeCap = StrokeCap.round;
+    final Paint armAccent = Paint()
+      ..color = ringColor.withOpacity(0.82)
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < 4; i++) {
+      final double a = i * pi * 0.5;
+      final Offset p1 = Offset(cos(a) * 34.0, sin(a) * 34.0);
+      final Offset p2 = Offset(cos(a) * 106.0, sin(a) * 106.0);
+      canvas.drawLine(p1, p2, armPaint);
+      canvas.drawLine(p1, p2, armAccent);
+      canvas.drawCircle(p2, 4.0, Paint()..color = ringColor);
+    }
+    canvas.restore();
+
+    final Path hub = Path();
+    for (int i = 0; i < 8; i++) {
+      final double a = i * (2.0 * pi / 8.0) + pi / 8.0;
+      final double x = safeCenter.dx + cos(a) * 42.0;
+      final double y = safeCenter.dy + sin(a) * 42.0;
+      if (i == 0) {
+        hub.moveTo(x, y);
+      } else {
+        hub.lineTo(x, y);
+      }
+    }
+    hub.close();
+    canvas.drawPath(hub, Paint()..color = const Color(0xFF0F1C33));
+    canvas.drawPath(
+      hub,
+      Paint()
+        ..color = ringColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2,
+    );
+    canvas.drawCircle(
+      safeCenter,
+      12.0 * (0.9 + 0.1 * pulse),
+      Paint()..color = const Color(0xFF00E5FF),
+    );
+    canvas.drawCircle(safeCenter, 5.0, Paint()..color = Colors.white);
+
+    final String baseTitle = sector.isNucleus
+        ? 'CENTRAL BLACK MARKET • SAFE ZONE'
+        : (sector.isCapitalCity
+            ? '${sector.name.toUpperCase()} • SAFE ZONE'
+            : 'OUTPOST SAFE ZONE');
+    TextPaint(
+      style: TextStyle(
+        color: ringColor,
+        fontSize: 12.5,
+        fontWeight: FontWeight.bold,
+        shadows: const <Shadow>[
+          Shadow(color: Color(0xE0020612), offset: Offset(1.0, 1.0), blurRadius: 3.0),
+        ],
+      ),
+    ).render(
+      canvas,
+      baseTitle,
+      Vector2(safeCenter.dx, safeCenter.dy + 64.0),
+      anchor: Anchor.center,
     );
   }
 
-  void _drawJumpGatePortal(
+  void _drawAllSectorPortals(
     Canvas canvas,
     Vector2 cam,
     double halfW,
     double halfH,
   ) {
-    final Vector2 gatePos = gameRef.activeJumpGatePosition;
-    if ((gatePos.x - cam.x).abs() > halfW + 120.0 ||
-        (gatePos.y - cam.y).abs() > halfH + 120.0) {
-      return;
+    final SectorPortal? nearest = gameRef.nearestJumpPortal;
+    final String? nextHop = gameRef.nextRouteHopSectorId;
+    for (final SectorPortal portal in gameRef.activePortals) {
+      if ((portal.worldX - cam.x).abs() > halfW + 130.0 ||
+          (portal.worldY - cam.y).abs() > halfH + 130.0) {
+        continue;
+      }
+      _drawSinglePortal(
+        canvas,
+        portal,
+        nearGate: nearest?.targetSectorId == portal.targetSectorId,
+        isNextRouteHop: portal.targetSectorId == nextHop,
+      );
     }
+  }
 
-    final Offset c = Offset(gatePos.x, gatePos.y);
+  void _drawSinglePortal(
+    Canvas canvas,
+    SectorPortal portal, {
+    required bool nearGate,
+    required bool isNextRouteHop,
+  }) {
+    final Offset c = Offset(portal.worldX, portal.worldY);
     final double t = gameRef.elapsedTime;
     final double pulse = 0.72 + 0.28 * sin(t * 4.4);
-    final bool nearGate = gameRef.isPlayerNearJumpGate;
+    final Color primary = isNextRouteHop
+        ? const Color(0xFF00E5FF)
+        : portal.accentColor;
     const double outerR = 46.0;
     const double innerR = 32.0;
 
     // Ambient energy bloom
     canvas.drawCircle(
       c,
-      nearGate ? 96.0 : 80.0,
+      nearGate ? 98.0 : (isNextRouteHop ? 92.0 : 80.0),
       Paint()
         ..shader = ui.Gradient.radial(
           c,
-          nearGate ? 96.0 : 80.0,
+          nearGate ? 98.0 : (isNextRouteHop ? 92.0 : 80.0),
           <Color>[
-            const Color(0xFF00E5FF).withOpacity(nearGate ? 0.45 : 0.28),
+            primary.withOpacity(nearGate ? 0.48 : 0.30),
             const Color(0xFF6366F1).withOpacity(nearGate ? 0.24 : 0.14),
             const Color(0x00000000),
           ],
@@ -2540,14 +2584,14 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
         ),
     );
 
-    if (nearGate) {
+    if (nearGate || isNextRouteHop) {
       canvas.drawCircle(
         c,
         GameConstants.jumpGateInteractRadius,
         Paint()
-          ..color = const Color(0xFF00E5FF).withOpacity(0.35 * pulse)
+          ..color = primary.withOpacity((nearGate ? 0.42 : 0.24) * pulse)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.8,
+          ..strokeWidth = nearGate ? 2.0 : 1.5,
       );
     }
 
@@ -2561,7 +2605,7 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
           innerR,
           <Color>[
             Colors.white.withOpacity(0.85 * pulse),
-            const Color(0xA600E5FF),
+            primary.withOpacity(0.68),
             const Color(0x734F46E5),
             const Color(0xB80A1026),
           ],
@@ -2593,13 +2637,13 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       Offset.zero,
       outerR - 3.6,
       Paint()
-        ..color = const Color(0xBF00E5FF)
+        ..color = primary.withOpacity(0.75)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5,
     );
     final Rect arcRect = Rect.fromCircle(center: Offset.zero, radius: outerR);
     final Paint arcPaint = Paint()
-      ..color = const Color(0xE000E5FF)
+      ..color = primary.withOpacity(0.90)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3.2
       ..strokeCap = StrokeCap.round;
@@ -2614,9 +2658,7 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
         node,
         3.0,
         Paint()
-          ..color = i.isEven
-              ? const Color(0xFF00E5FF)
-              : const Color(0xFFA78BFA),
+          ..color = i.isEven ? primary : const Color(0xFFA78BFA),
       );
     }
     canvas.restore();
@@ -2639,16 +2681,18 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
       Offset.zero,
       innerR + 3.0,
       Paint()
-        ..color = const Color(0xD1A78BFA)
+        ..color = primary.withOpacity(0.82)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.8,
     );
     canvas.restore();
 
-    // Crisp subtle gate label ("GATE: X-1" or "GATE: BASE")
+    final String label = isNextRouteHop
+        ? '★ ${portal.gateLabel} (ROUTE)'
+        : portal.gateLabel;
     final TextPaint labelTp = TextPaint(
       style: TextStyle(
-        color: nearGate ? const Color(0xFFE0F7FA) : const Color(0xDC38BDF8),
+        color: nearGate || isNextRouteHop ? Colors.white : primary,
         fontSize: 12.0,
         fontWeight: FontWeight.bold,
         shadows: const <Shadow>[
@@ -2658,7 +2702,7 @@ class SpaceMapComponent extends Component with HasGameRef<DarkOrbitGame> {
     );
     labelTp.render(
       canvas,
-      gameRef.activeMap.gateLabel,
+      label,
       Vector2(c.dx, c.dy + outerR + 16.0),
       anchor: Anchor.center,
     );
@@ -2762,59 +2806,31 @@ class PlayerShipComponent extends PositionComponent
       );
     }
 
-    if (gameRef.activeMap == GameMap.mapX1) {
-      const double minOuter = -GameConstants.mapX1RadiationOuterBuffer;
-      const double maxOuter =
-          GameConstants.mapX1Size + GameConstants.mapX1RadiationOuterBuffer;
-      position.x = position.x.clamp(minOuter, maxOuter);
-      position.y = position.y.clamp(minOuter, maxOuter);
+    final double mapSize = gameRef.activeMapSize;
+    const double minOuter = -GameConstants.mapX1RadiationOuterBuffer;
+    final double maxOuter = mapSize + GameConstants.mapX1RadiationOuterBuffer;
+    position.x = position.x.clamp(minOuter, maxOuter);
+    position.y = position.y.clamp(minOuter, maxOuter);
 
-      final bool outsideSquare = position.x < 0.0 ||
-          position.x > GameConstants.mapX1Size ||
-          position.y < 0.0 ||
-          position.y > GameConstants.mapX1Size;
-      isTakingZoneRadiation = !inSafeZone && outsideSquare;
-      requiredChipWarning = null;
+    final bool outsideSquare = position.x < 0.0 ||
+        position.x > mapSize ||
+        position.y < 0.0 ||
+        position.y > mapSize;
+    isTakingZoneRadiation = !inSafeZone && outsideSquare;
+    requiredChipWarning = null;
 
-      if (isTakingZoneRadiation) {
-        radiationTickTimer += dt;
-        if (radiationTickTimer >= GameConstants.radiationTickInterval) {
-          radiationTickTimer -= GameConstants.radiationTickInterval;
-          takeDamage(
-            GameConstants.mapX1BorderRadiationDps *
-                GameConstants.radiationTickInterval,
-            isRadiation: true,
-          );
-        }
-      } else {
-        radiationTickTimer = 0.0;
+    if (isTakingZoneRadiation) {
+      radiationTickTimer += dt;
+      if (radiationTickTimer >= GameConstants.radiationTickInterval) {
+        radiationTickTimer -= GameConstants.radiationTickInterval;
+        takeDamage(
+          GameConstants.mapX1BorderRadiationDps *
+              GameConstants.radiationTickInterval,
+          isRadiation: true,
+        );
       }
     } else {
-      const double maxPlayerRadius =
-          GameConstants.mapRadius - GameConstants.borderPadding;
-      final double dist = position.length;
-      if (dist > maxPlayerRadius && dist > 0.001) {
-        position.scale(maxPlayerRadius / dist);
-      }
-
-      final SpaceZoneInfo zoneInfo = SpaceZoneInfo.of(gameRef.currentZone);
-      final bool exposedToRad =
-          !inSafeZone && zoneInfo.requiredChipTier > gameRef.equippedChipTier;
-      isTakingZoneRadiation = exposedToRad;
-      requiredChipWarning = exposedToRad ? zoneInfo.requiredChipName : null;
-
-      if (exposedToRad) {
-        radiationTickTimer += dt;
-        if (radiationTickTimer >= GameConstants.radiationTickInterval) {
-          radiationTickTimer -= GameConstants.radiationTickInterval;
-          takeDamage(
-            zoneInfo.radiationDps * GameConstants.radiationTickInterval,
-            isRadiation: true,
-          );
-        }
-      } else {
-        radiationTickTimer = 0.0;
-      }
+      radiationTickTimer = 0.0;
     }
 
     if (inSafeZone && gameRef.autoFireEnabled) {
@@ -2914,13 +2930,12 @@ class PlayerShipComponent extends PositionComponent
     if (hp <= 0.0) {
       hp = gameRef.currentMaxHull;
       shield = gameRef.currentMaxShield;
-      if (gameRef.activeMap == GameMap.mapX1) {
-        position.setValues(
-          GameConstants.mapX1SpawnX,
-          GameConstants.mapX1SpawnY,
-        );
+      final String homeCity =
+          GalaxyMapGraph.homeCityForCompany(gameRef.pilotCompany);
+      if (gameRef.currentSector.hasCentralSafeZone) {
+        position.setFrom(gameRef.activeSafeZoneCenter);
       } else {
-        position.setZero();
+        gameRef.jumpToSector(homeCity);
       }
       gameRef.autoFireEnabled = false;
       gameRef.cancelAutopilot();
@@ -3358,476 +3373,705 @@ class PlayerShipComponent extends PositionComponent
     double time,
     double flash,
   ) {
-    final double glowPulse = 0.72 + 0.28 * sin(time * 6.4);
-
-    // 1. Existing 3 Rear Thrusters (dynamic plasma flames)
+    // 1. Double / Twin Main Thrusters venting existing dynamic cyan plasma exhaust
     _drawPlasmaThrusterFlame(
       canvas,
-      Offset(cx - 19.0, cy - 9.2),
+      Offset(cx - 20.6, cy - 4.8),
       thrust: thrust,
-      maxLen: 20.0,
-      halfW: 3.5,
-      pulse: pulse,
-      phaseOffset: 0.7,
-    );
-    _drawPlasmaThrusterFlame(
-      canvas,
-      Offset(cx - 21.8, cy),
-      thrust: thrust,
-      maxLen: 27.0,
-      halfW: 4.6,
+      maxLen: 24.0,
+      halfW: 3.8,
       pulse: pulse,
       phaseOffset: 0.0,
     );
     _drawPlasmaThrusterFlame(
       canvas,
-      Offset(cx - 19.0, cy + 9.2),
+      Offset(cx - 20.6, cy + 4.8),
       thrust: thrust,
-      maxLen: 20.0,
-      halfW: 3.5,
+      maxLen: 24.0,
+      halfW: 3.8,
       pulse: pulse,
-      phaseOffset: 2.3,
+      phaseOffset: 1.9,
     );
 
-    // 3 Rear Armored Thruster Bells
-    final List<List<double>> nozzles = <List<double>>[
-      <double>[cx - 19.0, cy - 9.2, 2.8],
-      <double>[cx - 21.8, cy, 3.7],
-      <double>[cx - 19.0, cy + 9.2, 2.8],
-    ];
-    for (final List<double> n in nozzles) {
-      final double nx = n[0];
-      final double ny = n[1];
-      final double halfH = n[2];
-      final Path bell = Path()
-        ..moveTo(nx + 5.6, ny - halfH * 1.18)
-        ..lineTo(nx, ny - halfH * 0.86)
-        ..lineTo(nx, ny + halfH * 0.86)
-        ..lineTo(nx + 5.6, ny + halfH * 1.18)
+    drawBattlecruiserGoliathBody(
+      canvas,
+      cx: cx,
+      cy: cy,
+      thrust: thrust,
+      time: time,
+      flash: flash,
+    );
+  }
+
+  static void drawBattlecruiserGoliathBody(
+    Canvas canvas, {
+    required double cx,
+    required double cy,
+    double thrust = 0.35,
+    double time = 0.0,
+    double flash = 0.0,
+  }) {
+    final double corePulse = 0.78 + 0.22 * sin(time * 6.2);
+
+    // Twin Main Rear Thruster Nozzles (layered dark-steel bells + cyan exhaust collar)
+    for (final double sign in const <double>[-1.0, 1.0]) {
+      final double ny = cy + sign * 4.8;
+      final Path nozzle = Path()
+        ..moveTo(cx - 15.2, ny - 3.3)
+        ..lineTo(cx - 21.0, ny - 2.5)
+        ..lineTo(cx - 21.0, ny + 2.5)
+        ..lineTo(cx - 15.2, ny + 3.3)
         ..close();
       canvas.drawPath(
-        bell,
+        nozzle,
         Paint()
           ..shader = ui.Gradient.linear(
-            Offset(nx, ny - halfH * 1.2),
-            Offset(nx, ny + halfH * 1.2),
+            Offset(cx - 18.0, ny - 3.3),
+            Offset(cx - 18.0, ny + 3.3),
             const <Color>[
-              Color(0xFF475569),
+              Color(0xFF64748B),
               Color(0xFF1E293B),
+              Color(0xFF090D16),
+            ],
+            const <double>[0.0, 0.5, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        nozzle,
+        Paint()
+          ..color = const Color(0xCCE2E8F0)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.85,
+      );
+      canvas.drawLine(
+        Offset(cx - 20.4, ny - 1.8),
+        Offset(cx - 20.4, ny + 1.8),
+        Paint()
+          ..color = const Color(0xFF00E5FF).withOpacity(0.72 + 0.28 * thrust)
+          ..strokeWidth = 1.4
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+
+    // 2. Angular "Shoulder" & Winglet Armor Plates (stepped-panel layers + bright white highlights)
+    final List<Path> shoulderWingPaths = <Path>[];
+    for (final double sign in const <double>[-1.0, 1.0]) {
+      final Path outerWinglet = Path()
+        ..moveTo(cx - 1.2, cy + sign * 9.8)
+        ..lineTo(cx - 3.0, cy + sign * 21.4)
+        ..lineTo(cx - 8.2, cy + sign * 24.8)
+        ..lineTo(cx - 12.2, cy + sign * 21.5)
+        ..lineTo(cx - 10.8, cy + sign * 19.0)
+        ..lineTo(cx - 15.4, cy + sign * 17.6)
+        ..lineTo(cx - 13.8, cy + sign * 14.5)
+        ..lineTo(cx - 16.8, cy + sign * 12.2)
+        ..lineTo(cx - 13.2, cy + sign * 9.2)
+        ..close();
+      shoulderWingPaths.add(outerWinglet);
+      canvas.drawPath(
+        outerWinglet,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx - 3.0, cy + sign * 24.8),
+            Offset(cx - 16.0, cy + sign * 9.2),
+            const <Color>[
+              Color(0xFF1E293B),
+              Color(0xFF334155),
               Color(0xFF0F172A),
             ],
             const <double>[0.0, 0.5, 1.0],
           ),
       );
       canvas.drawPath(
-        bell,
+        outerWinglet,
         Paint()
-          ..color = const Color(0xBF94A3B8)
+          ..color = const Color(0xE6F8FAFC)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.05
+          ..strokeJoin = StrokeJoin.miter,
+      );
+
+      final Path midStepPlate = Path()
+        ..moveTo(cx - 3.4, cy + sign * 11.4)
+        ..lineTo(cx - 4.8, cy + sign * 20.4)
+        ..lineTo(cx - 9.0, cy + sign * 21.6)
+        ..lineTo(cx - 12.2, cy + sign * 16.4)
+        ..lineTo(cx - 11.4, cy + sign * 11.2)
+        ..close();
+      canvas.drawPath(
+        midStepPlate,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx - 4.0, cy + sign * 21.5),
+            Offset(cx - 12.0, cy + sign * 11.2),
+            const <Color>[
+              Color(0xFF64748B),
+              Color(0xFF334155),
+              Color(0xFF111827),
+            ],
+            const <double>[0.0, 0.5, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        midStepPlate,
+        Paint()
+          ..color = const Color(0xFF0F172A)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.9,
       );
-      canvas.drawLine(
-        Offset(nx + 0.6, ny - halfH * 0.66),
-        Offset(nx + 0.6, ny + halfH * 0.66),
+
+      final Path upperBevelPlate = Path()
+        ..moveTo(cx - 5.4, cy + sign * 13.2)
+        ..lineTo(cx - 6.4, cy + sign * 18.6)
+        ..lineTo(cx - 9.6, cy + sign * 18.4)
+        ..lineTo(cx - 10.6, cy + sign * 13.6)
+        ..close();
+      canvas.drawPath(
+        upperBevelPlate,
         Paint()
-          ..color = const Color(0xFF38BDF8).withOpacity(0.65 + 0.35 * thrust)
-          ..strokeWidth = 1.4
-          ..strokeCap = StrokeCap.round,
+          ..shader = ui.Gradient.linear(
+            Offset(cx - 5.5, cy + sign * 18.6),
+            Offset(cx - 10.6, cy + sign * 13.2),
+            const <Color>[
+              Color(0xFFCBD5E1),
+              Color(0xFF64748B),
+              Color(0xFF334155),
+            ],
+            const <double>[0.0, 0.5, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        upperBevelPlate,
+        Paint()
+          ..color = const Color(0xD9F8FAFC)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.8,
       );
     }
 
-    // 2. Classic Goliath Top-Down Hull Silhouette:
-    // Recessed beveled central nose + open forward notches + forward-curved pincer wings + broad rear armored shoulders
-    final Path goliathHull = Path()
-      ..moveTo(cx + 18.2, cy - 3.8)
-      ..lineTo(cx + 19.6, cy - 1.9)
-      ..lineTo(cx + 19.6, cy + 1.9)
-      ..lineTo(cx + 18.2, cy + 3.8)
-      ..lineTo(cx + 12.2, cy + 7.8)
-      ..lineTo(cx + 7.4, cy + 10.4)
-      ..cubicTo(
-        cx + 13.8, cy + 11.0,
-        cx + 22.8, cy + 12.6,
-        cx + 30.4, cy + 14.2,
-      )
-      ..cubicTo(
-        cx + 26.2, cy + 22.4,
-        cx + 12.5, cy + 28.6,
-        cx - 3.6, cy + 26.8,
-      )
-      ..cubicTo(
-        cx - 12.8, cy + 25.8,
-        cx - 18.6, cy + 20.6,
-        cx - 19.2, cy + 13.6,
-      )
-      ..lineTo(cx - 16.4, cy + 11.4)
-      ..lineTo(cx - 16.4, cy + 6.4)
-      ..lineTo(cx - 20.2, cy + 4.2)
-      ..lineTo(cx - 20.2, cy - 4.2)
-      ..lineTo(cx - 16.4, cy - 6.4)
-      ..lineTo(cx - 16.4, cy - 11.4)
-      ..lineTo(cx - 19.2, cy - 13.6)
-      ..cubicTo(
-        cx - 18.6, cy - 20.6,
-        cx - 12.8, cy - 25.8,
-        cx - 3.6, cy - 26.8,
-      )
-      ..cubicTo(
-        cx + 12.5, cy - 28.6,
-        cx + 26.2, cy - 22.4,
-        cx + 30.4, cy - 14.2,
-      )
-      ..cubicTo(
-        cx + 22.8, cy - 12.6,
-        cx + 13.8, cy - 11.0,
-        cx + 7.4, cy - 10.4,
-      )
-      ..lineTo(cx + 12.2, cy - 7.8)
-      ..close();
+    // 3. Heavy Tapered Rear Engine Block with Pointed Stabilizers & Layered Armor Casing
+    for (final double sign in const <double>[-1.0, 1.0]) {
+      final Path sideFin = Path()
+        ..moveTo(cx - 12.0, cy + sign * 7.6)
+        ..lineTo(cx - 22.8, cy + sign * 9.8)
+        ..lineTo(cx - 19.6, cy + sign * 6.0)
+        ..lineTo(cx - 13.5, cy + sign * 5.4)
+        ..close();
+      canvas.drawPath(
+        sideFin,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx - 12.0, cy + sign * 9.8),
+            Offset(cx - 22.0, cy + sign * 5.4),
+            const <Color>[
+              Color(0xFF475569),
+              Color(0xFF1E293B),
+              Color(0xFF0B1120),
+            ],
+            const <double>[0.0, 0.5, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        sideFin,
+        Paint()
+          ..color = const Color(0xDCE2E8F0)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.9
+          ..strokeJoin = StrokeJoin.miter,
+      );
+    }
 
+    final Path engineBlock = Path()
+      ..moveTo(cx - 8.5, cy - 9.4)
+      ..lineTo(cx - 16.4, cy - 8.0)
+      ..lineTo(cx - 19.8, cy - 6.8)
+      ..lineTo(cx - 19.8, cy - 2.6)
+      ..lineTo(cx - 24.8, cy)
+      ..lineTo(cx - 19.8, cy + 2.6)
+      ..lineTo(cx - 19.8, cy + 6.8)
+      ..lineTo(cx - 16.4, cy + 8.0)
+      ..lineTo(cx - 8.5, cy + 9.4)
+      ..close();
     canvas.drawPath(
-      goliathHull,
+      engineBlock,
       Paint()
         ..shader = ui.Gradient.linear(
-          Offset(cx + 4.0, cy - 28.0),
-          Offset(cx - 6.0, cy + 28.0),
+          Offset(cx - 9.0, cy - 9.4),
+          Offset(cx - 24.0, cy + 9.4),
           const <Color>[
             Color(0xFF1E293B),
             Color(0xFF475569),
-            Color(0xFF64748B),
             Color(0xFF334155),
             Color(0xFF0F172A),
           ],
-          const <double>[0.0, 0.24, 0.5, 0.76, 1.0],
+          const <double>[0.0, 0.35, 0.7, 1.0],
         ),
     );
     canvas.drawPath(
-      goliathHull,
+      engineBlock,
       Paint()
-        ..color = const Color(0xC7CBD5E1)
+        ..color = const Color(0xE0F1F5F9)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.35
+        ..strokeWidth = 1.0
         ..strokeJoin = StrokeJoin.round,
     );
 
-    // 3. Layered Armored Pincer Wing Plates, Broad Rear Shoulders, Panel Seams & Warm Orange/Amber Tactical Stripes
+    final Path enginePlate = Path()
+      ..moveTo(cx - 10.6, cy - 6.0)
+      ..lineTo(cx - 18.2, cy - 4.4)
+      ..lineTo(cx - 19.4, cy)
+      ..lineTo(cx - 18.2, cy + 4.4)
+      ..lineTo(cx - 10.6, cy + 6.0)
+      ..close();
+    canvas.drawPath(
+      enginePlate,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(cx - 11.0, cy - 6.0),
+          Offset(cx - 19.0, cy + 6.0),
+          const <Color>[
+            Color(0xFF64748B),
+            Color(0xFF334155),
+            Color(0xFF1E293B),
+          ],
+          const <double>[0.0, 0.5, 1.0],
+        ),
+    );
+    canvas.drawPath(
+      enginePlate,
+      Paint()
+        ..color = const Color(0xFF0F172A)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9,
+    );
+    canvas.drawLine(
+      Offset(cx - 13.2, cy),
+      Offset(cx - 24.0, cy),
+      Paint()
+        ..color = const Color(0xEBF8FAFC)
+        ..strokeWidth = 1.15
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // 4. Small Forward-Facing Weapon / Laser Barrels on Outer Edges of Pincers
     for (final double sign in const <double>[-1.0, 1.0]) {
-      final Path rearShoulder = Path()
-        ..moveTo(cx - 2.0, cy + sign * 24.4)
+      final double byOuter = cy + sign * 13.8;
+      canvas.drawLine(
+        Offset(cx + 19.2, byOuter),
+        Offset(cx + 27.6, byOuter),
+        Paint()
+          ..color = const Color(0xFF1E293B)
+          ..strokeWidth = 2.3,
+      );
+      canvas.drawLine(
+        Offset(cx + 20.0, byOuter - sign * 0.55),
+        Offset(cx + 27.2, byOuter - sign * 0.55),
+        Paint()
+          ..color = const Color(0xEBF1F5F9)
+          ..strokeWidth = 0.8
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.drawCircle(
+        Offset(cx + 27.9, byOuter),
+        1.15,
+        Paint()..color = const Color(0xFF7DD3FC),
+      );
+
+      final double byTip = cy + sign * 8.8;
+      canvas.drawLine(
+        Offset(cx + 23.6, byTip),
+        Offset(cx + 29.8, byTip),
+        Paint()
+          ..color = const Color(0xFF334155)
+          ..strokeWidth = 1.9,
+      );
+      canvas.drawLine(
+        Offset(cx + 24.2, byTip - sign * 0.45),
+        Offset(cx + 29.5, byTip - sign * 0.45),
+        Paint()
+          ..color = const Color(0xEBFFFFFF)
+          ..strokeWidth = 0.7
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.drawCircle(
+        Offset(cx + 30.1, byTip),
+        1.0,
+        Paint()..color = const Color(0xFFBAE6FD),
+      );
+    }
+
+    // 5. Massive Circular Curved Pincers ("O" / "U" Horseshoe Shape, ~18% larger than Interceptor)
+    final List<Path> pincerPaths = <Path>[];
+    for (final double sign in const <double>[-1.0, 1.0]) {
+      final Path pincer = Path()
+        ..moveTo(cx - 3.6, cy + sign * 17.6)
         ..cubicTo(
-          cx - 10.4, cy + sign * 23.6,
-          cx - 15.8, cy + sign * 19.2,
-          cx - 16.6, cy + sign * 13.0,
+          cx + 10.6, cy + sign * 25.4,
+          cx + 26.8, cy + sign * 19.2,
+          cx + 28.4, cy + sign * 3.1,
         )
-        ..lineTo(cx - 11.0, cy + sign * 9.8)
-        ..lineTo(cx - 1.5, cy + sign * 11.2)
-        ..lineTo(cx + 1.8, cy + sign * 18.8)
+        ..lineTo(cx + 25.6, cy + sign * 4.5)
+        ..cubicTo(
+          cx + 22.8, cy + sign * 13.4,
+          cx + 11.4, cy + sign * 15.6,
+          cx - 1.0, cy + sign * 9.0,
+        )
         ..close();
+      pincerPaths.add(pincer);
+
       canvas.drawPath(
-        rearShoulder,
+        pincer,
         Paint()
           ..shader = ui.Gradient.linear(
-            Offset(cx - 1.0, cy + sign * 24.0),
-            Offset(cx - 16.0, cy + sign * 10.0),
+            Offset(cx + 2.0, cy + sign * 24.0),
+            Offset(cx + 27.0, cy + sign * 3.5),
             const <Color>[
-              Color(0xFF475569),
+              Color(0xFF0B1120),
+              Color(0xFF1E293B),
               Color(0xFF334155),
+              Color(0xFF1E293B),
+              Color(0xFF090D16),
+            ],
+            const <double>[0.0, 0.25, 0.5, 0.78, 1.0],
+          ),
+      );
+
+      // Sub-panel 1: Sculpted Metallic Silver Outer Crescent Armor Plate
+      final Path outerArmorPlate = Path()
+        ..moveTo(cx + 0.6, cy + sign * 17.8)
+        ..cubicTo(
+          cx + 9.8, cy + sign * 22.0,
+          cx + 20.6, cy + sign * 18.6,
+          cx + 25.0, cy + sign * 10.6,
+        )
+        ..lineTo(cx + 22.8, cy + sign * 9.6)
+        ..cubicTo(
+          cx + 18.8, cy + sign * 16.0,
+          cx + 9.8, cy + sign * 18.6,
+          cx + 1.6, cy + sign * 14.8,
+        )
+        ..close();
+      canvas.drawPath(
+        outerArmorPlate,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx + 2.0, cy + sign * 20.0),
+            Offset(cx + 24.0, cy + sign * 10.0),
+            const <Color>[
+              Color(0xFF94A3B8),
+              Color(0xFFCBD5E1),
+              Color(0xFF475569),
+              Color(0xFF1E293B),
+            ],
+            const <double>[0.0, 0.35, 0.72, 1.0],
+          ),
+      );
+      canvas.drawPath(
+        outerArmorPlate,
+        Paint()
+          ..color = const Color(0xE60B1120)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.85,
+      );
+
+      // Sub-panel 2: Inner Dark Steel-Gray Recessed Curve Plate
+      final Path innerArmorPlate = Path()
+        ..moveTo(cx + 2.8, cy + sign * 13.6)
+        ..cubicTo(
+          cx + 10.2, cy + sign * 16.4,
+          cx + 17.8, cy + sign * 14.8,
+          cx + 21.8, cy + sign * 9.4,
+        )
+        ..lineTo(cx + 20.4, cy + sign * 8.4)
+        ..cubicTo(
+          cx + 16.8, cy + sign * 13.0,
+          cx + 10.2, cy + sign * 14.4,
+          cx + 3.4, cy + sign * 11.8,
+        )
+        ..close();
+      canvas.drawPath(
+        innerArmorPlate,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(cx + 3.0, cy + sign * 14.0),
+            Offset(cx + 21.0, cy + sign * 8.5),
+            const <Color>[
+              Color(0xFF334155),
+              Color(0xFF64748B),
               Color(0xFF1E293B),
             ],
             const <double>[0.0, 0.5, 1.0],
           ),
       );
       canvas.drawPath(
-        rearShoulder,
+        innerArmorPlate,
         Paint()
-          ..color = const Color(0xFF0F172A)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.05,
-      );
-
-      final Path pincerPlate = Path()
-        ..moveTo(cx + 27.6, cy + sign * 15.1)
-        ..cubicTo(
-          cx + 23.4, cy + sign * 20.8,
-          cx + 12.2, cy + sign * 25.4,
-          cx + 0.2, cy + sign * 23.8,
-        )
-        ..lineTo(cx + 3.4, cy + sign * 15.8)
-        ..cubicTo(
-          cx + 10.2, cy + sign * 13.8,
-          cx + 18.8, cy + sign * 13.8,
-          cx + 27.6, cy + sign * 15.1,
-        )
-        ..close();
-      canvas.drawPath(
-        pincerPlate,
-        Paint()
-          ..shader = ui.Gradient.linear(
-            Offset(cx + 26.0, cy + sign * 15.0),
-            Offset(cx + 1.0, cy + sign * 24.0),
-            const <Color>[
-              Color(0xFF94A3B8),
-              Color(0xFF475569),
-              Color(0xFF1E293B),
-            ],
-            const <double>[0.0, 0.48, 1.0],
-          ),
-      );
-      canvas.drawPath(
-        pincerPlate,
-        Paint()
-          ..color = const Color(0xFF0F172A)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.05,
-      );
-
-      // Subtle warm orange/amber tactical accent stripe along pincer blade
-      final Path amberStripe = Path()
-        ..moveTo(cx + 21.8, cy + sign * 17.5)
-        ..cubicTo(
-          cx + 16.5, cy + sign * 21.4,
-          cx + 9.2, cy + sign * 23.2,
-          cx + 2.8, cy + sign * 22.5,
-        )
-        ..lineTo(cx + 4.1, cy + sign * 19.6)
-        ..cubicTo(
-          cx + 9.6, cy + sign * 20.1,
-          cx + 15.6, cy + sign * 18.7,
-          cx + 20.2, cy + sign * 15.8,
-        )
-        ..close();
-      canvas.drawPath(
-        amberStripe,
-        Paint()
-          ..shader = ui.Gradient.linear(
-            Offset(cx + 21.0, cy + sign * 16.0),
-            Offset(cx + 3.0, cy + sign * 22.0),
-            const <Color>[
-              Color(0xFFF59E0B),
-              Color(0xFFEA580C),
-              Color(0xFFFBBF24),
-            ],
-            const <double>[0.0, 0.55, 1.0],
-          ),
-      );
-      canvas.drawPath(
-        amberStripe,
-        Paint()
-          ..color = const Color(0xB80F172A)
+          ..color = const Color(0xFF090D16)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.75,
       );
 
-      // Rear shoulder warm amber tactical hash
-      canvas.drawLine(
-        Offset(cx - 5.2, cy + sign * 21.8),
-        Offset(cx - 11.4, cy + sign * 18.4),
-        Paint()
-          ..color = const Color(0xE6F59E0B)
-          ..strokeWidth = 2.0
-          ..strokeCap = StrokeCap.round,
-      );
-
-      // Brushed-steel highlight along outer pincer blade leading edge
-      final Path outerBladeTrim = Path()
-        ..moveTo(cx + 29.2, cy + sign * 14.8)
+      // Sub-panel 3: Pointed Forward Tip Metallic Bevel Cap
+      final Path tipBevel = Path()
+        ..moveTo(cx + 27.5, cy + sign * 3.8)
         ..cubicTo(
-          cx + 24.8, cy + sign * 21.8,
-          cx + 13.4, cy + sign * 26.8,
-          cx + 1.0, cy + sign * 26.0,
-        );
+          cx + 26.8, cy + sign * 7.2,
+          cx + 25.4, cy + sign * 9.6,
+          cx + 23.6, cy + sign * 11.2,
+        )
+        ..lineTo(cx + 22.4, cy + sign * 9.6)
+        ..cubicTo(
+          cx + 23.8, cy + sign * 8.2,
+          cx + 24.8, cy + sign * 6.4,
+          cx + 25.4, cy + sign * 4.8,
+        )
+        ..close();
       canvas.drawPath(
-        outerBladeTrim,
+        tipBevel,
         Paint()
-          ..color = const Color(0xCCE2E8F0)
+          ..shader = ui.Gradient.linear(
+            Offset(cx + 27.5, cy + sign * 3.8),
+            Offset(cx + 22.4, cy + sign * 11.0),
+            const <Color>[Color(0xFFE2E8F0), Color(0xFF64748B)],
+          ),
+      );
+
+      // Recessed dark panel divider seams
+      final Paint seamPaint = Paint()
+        ..color = const Color(0xE6090D16)
+        ..strokeWidth = 0.95;
+      canvas.drawLine(
+        Offset(cx + 8.6, cy + sign * 21.0),
+        Offset(cx + 9.0, cy + sign * 13.6),
+        seamPaint,
+      );
+      canvas.drawLine(
+        Offset(cx + 18.2, cy + sign * 18.6),
+        Offset(cx + 16.4, cy + sign * 12.6),
+        seamPaint,
+      );
+
+      // High-Contrast Bright White / Cyan Neon Edge Highlights
+      canvas.drawPath(
+        pincer,
+        Paint()
+          ..color = const Color(0xFF00E5FF).withOpacity(0.34 * corePulse)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.25
-          ..strokeCap = StrokeCap.round,
+          ..strokeWidth = 2.9
+          ..strokeJoin = StrokeJoin.round,
       );
-
-      // Recessed inner-notch weapon emitter ports
-      canvas.drawLine(
-        Offset(cx + 11.2, cy + sign * 12.0),
-        Offset(cx + 20.2, cy + sign * 13.0),
+      canvas.drawPath(
+        pincer,
         Paint()
-          ..color = const Color(0xFF334155)
-          ..strokeWidth = 2.1,
-      );
-      canvas.drawCircle(
-        Offset(cx + 20.6, cy + sign * 13.0),
-        1.8,
-        Paint()..color = const Color(0xFF38BDF8).withOpacity(0.55 * glowPulse),
-      );
-
-      // Armor panel seam lines
-      canvas.drawLine(
-        Offset(cx + 12.6, cy + sign * 23.6),
-        Offset(cx + 9.6, cy + sign * 14.4),
-        Paint()
-          ..color = const Color(0xD90F172A)
-          ..strokeWidth = 1.0,
-      );
-      canvas.drawLine(
-        Offset(cx - 5.8, cy + sign * 23.4),
-        Offset(cx - 7.8, cy + sign * 11.2),
-        Paint()
-          ..color = const Color(0xD10F172A)
-          ..strokeWidth = 1.0,
+          ..color = const Color(0xF5F0F9FF)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.15
+          ..strokeJoin = StrokeJoin.round,
       );
     }
 
-    // 4. Thick Muscular Central Fuselage Spine with Recessed Beveled Armored Nose
-    final Path centralFuselage = Path()
-      ..moveTo(cx + 17.8, cy - 3.4)
-      ..lineTo(cx + 19.0, cy - 1.6)
-      ..lineTo(cx + 19.0, cy + 1.6)
-      ..lineTo(cx + 17.8, cy + 3.4)
-      ..lineTo(cx + 10.6, cy + 8.0)
-      ..lineTo(cx - 4.0, cy + 9.4)
-      ..lineTo(cx - 14.8, cy + 7.4)
-      ..lineTo(cx - 18.2, cy + 3.4)
-      ..lineTo(cx - 18.2, cy - 3.4)
-      ..lineTo(cx - 14.8, cy - 7.4)
-      ..lineTo(cx - 4.0, cy - 9.4)
-      ..lineTo(cx + 10.6, cy - 8.0)
+    // 6. Central Body & Fuselage (Needle-Like Inner Nose Completely Enveloped by Curved Pincers)
+    final Path centralHull = Path()
+      ..moveTo(cx + 16.4, cy)
+      ..lineTo(cx + 9.8, cy - 3.6)
+      ..lineTo(cx + 4.0, cy - 7.0)
+      ..lineTo(cx - 4.4, cy - 9.4)
+      ..lineTo(cx - 11.8, cy - 7.4)
+      ..lineTo(cx - 14.8, cy - 4.0)
+      ..lineTo(cx - 14.8, cy + 4.0)
+      ..lineTo(cx - 11.8, cy + 7.4)
+      ..lineTo(cx - 4.4, cy + 9.4)
+      ..lineTo(cx + 4.0, cy + 7.0)
+      ..lineTo(cx + 9.8, cy + 3.6)
       ..close();
     canvas.drawPath(
-      centralFuselage,
+      centralHull,
       Paint()
         ..shader = ui.Gradient.linear(
-          Offset(cx + 6.0, cy - 9.5),
-          Offset(cx - 6.0, cy + 9.5),
+          Offset(cx + 4.0, cy - 9.4),
+          Offset(cx - 10.0, cy + 9.4),
           const <Color>[
-            Color(0xFF94A3B8),
-            Color(0xFFCBD5E1),
-            Color(0xFF64748B),
-            Color(0xFF334155),
             Color(0xFF1E293B),
+            Color(0xFF64748B),
+            Color(0xFF94A3B8),
+            Color(0xFF334155),
+            Color(0xFF0F172A),
           ],
-          const <double>[0.0, 0.25, 0.55, 0.8, 1.0],
+          const <double>[0.0, 0.25, 0.5, 0.78, 1.0],
         ),
     );
     canvas.drawPath(
-      centralFuselage,
+      centralHull,
       Paint()
-        ..color = const Color(0xFF0F172A)
+        ..color = const Color(0x3800E5FF)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.25
+        ..strokeWidth = 2.2
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      centralHull,
+      Paint()
+        ..color = const Color(0xEBF1F5F9)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.05
         ..strokeJoin = StrokeJoin.round,
     );
 
-    // Beveled front nose plate & subtle amber centerline accent
-    final Path noseBevel = Path()
-      ..moveTo(cx + 18.2, cy - 1.5)
-      ..lineTo(cx + 13.6, cy - 4.2)
-      ..lineTo(cx + 13.6, cy + 4.2)
-      ..lineTo(cx + 18.2, cy + 1.5)
-      ..close();
-    canvas.drawPath(noseBevel, Paint()..color = const Color(0xFF334155));
-    canvas.drawPath(
-      noseBevel,
-      Paint()
-        ..color = const Color(0xA6E2E8F0)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.9,
-    );
-    canvas.drawLine(
-      Offset(cx + 17.5, cy),
-      Offset(cx + 14.3, cy),
-      Paint()
-        ..color = const Color(0xE6F59E0B)
-        ..strokeWidth = 1.7
-        ..strokeCap = StrokeCap.round,
-    );
-
-    canvas.drawLine(
-      Offset(cx - 1.8, cy - 8.6),
-      Offset(cx - 1.8, cy + 8.6),
-      Paint()
-        ..color = const Color(0xCC0F172A)
-        ..strokeWidth = 1.05,
-    );
-    final Paint louverPaint = Paint()
-      ..color = const Color(0xE00F172A)
-      ..strokeWidth = 1.25
-      ..strokeCap = StrokeCap.round;
-    for (final double lx in <double>[cx - 6.0, cx - 9.4, cx - 12.8]) {
-      canvas.drawLine(Offset(lx, cy - 4.6), Offset(lx, cy + 4.6), louverPaint);
-    }
-
-    // 5. Glowing Cockpit Canopy near the Front-Center
-    final Path cockpit = Path()
-      ..moveTo(cx + 13.2, cy)
-      ..cubicTo(
-        cx + 10.6, cy - 3.6,
-        cx + 5.6, cy - 4.4,
-        cx + 0.8, cy - 3.2,
-      )
-      ..lineTo(cx - 0.8, cy)
-      ..lineTo(cx + 0.8, cy + 3.2)
-      ..cubicTo(
-        cx + 5.6, cy + 4.4,
-        cx + 10.6, cy + 3.6,
-        cx + 13.2, cy,
-      )
+    // Sleek Needle-Nose Prow & Fine Metallic Spire
+    final Path needleProw = Path()
+      ..moveTo(cx + 21.8, cy)
+      ..lineTo(cx + 11.2, cy - 2.0)
+      ..lineTo(cx + 9.6, cy)
+      ..lineTo(cx + 11.2, cy + 2.0)
       ..close();
     canvas.drawPath(
-      cockpit,
-      Paint()
-        ..color = const Color(0xFF38BDF8).withOpacity(0.24 * glowPulse)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.2,
-    );
-    canvas.drawPath(
-      cockpit,
+      needleProw,
       Paint()
         ..shader = ui.Gradient.linear(
-          Offset(cx + 12.0, cy - 4.4),
-          Offset(cx - 1.0, cy + 4.4),
+          Offset(cx + 21.0, cy - 2.0),
+          Offset(cx + 10.0, cy + 2.0),
           const <Color>[
-            Color(0xFFF0F9FF),
-            Color(0xFF38BDF8),
-            Color(0xFF0284C7),
-            Color(0xFF0C4A6E),
+            Color(0xFFF8FAFC),
+            Color(0xFF94A3B8),
+            Color(0xFF334155),
           ],
-          const <double>[0.0, 0.35, 0.7, 1.0],
+          const <double>[0.0, 0.5, 1.0],
         ),
     );
     canvas.drawPath(
-      cockpit,
+      needleProw,
       Paint()
         ..color = const Color(0xFF0F172A)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
+        ..strokeWidth = 0.75,
     );
     canvas.drawLine(
-      Offset(cx + 6.4, cy - 3.6),
-      Offset(cx + 5.8, cy + 3.6),
+      Offset(cx + 19.6, cy),
+      Offset(cx + 23.0, cy),
       Paint()
-        ..color = const Color(0xD90F172A)
-        ..strokeWidth = 0.95,
-    );
-    canvas.drawLine(
-      Offset(cx + 10.4, cy - 1.1),
-      Offset(cx + 3.0, cy - 2.1),
-      Paint()
-        ..color = const Color(0xF0FFFFFF)
-        ..strokeWidth = 1.35
+        ..color = const Color(0xFFE0F2FE)
+        ..strokeWidth = 1.05
         ..strokeCap = StrokeCap.round,
     );
 
+    // 7. Streamlined Dark Armored Cockpit + Multi-Layered Glowing GREEN Jewel Canopy/Core
+    final Path cockpitHousing = Path()
+      ..moveTo(cx + 6.8, cy)
+      ..cubicTo(
+        cx + 4.8, cy - 3.6,
+        cx - 0.6, cy - 4.8,
+        cx - 6.6, cy - 3.6,
+      )
+      ..lineTo(cx - 8.4, cy)
+      ..lineTo(cx - 6.6, cy + 3.6)
+      ..cubicTo(
+        cx - 0.6, cy + 4.8,
+        cx + 4.8, cy + 3.6,
+        cx + 6.8, cy,
+      )
+      ..close();
+    canvas.drawPath(
+      cockpitHousing,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(cx + 6.0, cy - 4.5),
+          Offset(cx - 8.0, cy + 4.5),
+          const <Color>[
+            Color(0xFF1E293B),
+            Color(0xFF0B1120),
+            Color(0xFF064E3B),
+          ],
+          const <double>[0.0, 0.5, 1.0],
+        ),
+    );
+    canvas.drawPath(
+      cockpitHousing,
+      Paint()
+        ..color = const Color(0xD9CBD5E1)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    final Path greenJewel = Path()
+      ..moveTo(cx + 2.8, cy)
+      ..cubicTo(
+        cx + 1.2, cy - 2.6,
+        cx - 2.4, cy - 3.1,
+        cx - 5.4, cy - 2.2,
+      )
+      ..lineTo(cx - 6.6, cy)
+      ..lineTo(cx - 5.4, cy + 2.2)
+      ..cubicTo(
+        cx - 2.4, cy + 3.1,
+        cx + 1.2, cy + 2.6,
+        cx + 2.8, cy,
+      )
+      ..close();
+    canvas.drawCircle(
+      Offset(cx - 2.0, cy),
+      6.2,
+      Paint()..color = const Color(0xFF22C55E).withOpacity(0.28 * corePulse),
+    );
+    canvas.drawPath(
+      greenJewel,
+      Paint()
+        ..color = const Color(0xFF4ADE80).withOpacity(0.45 * corePulse)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.6,
+    );
+    canvas.drawPath(
+      greenJewel,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(cx - 1.8, cy - 0.5),
+          5.0,
+          const <Color>[
+            Color(0xFFECFDF5),
+            Color(0xFF4ADE80),
+            Color(0xFF16A34A),
+            Color(0xFF065F46),
+          ],
+          const <double>[0.0, 0.35, 0.72, 1.0],
+        ),
+    );
+    canvas.drawPath(
+      greenJewel,
+      Paint()
+        ..color = const Color(0xEBBBF7D0)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.85,
+    );
+    canvas.drawLine(
+      Offset(cx + 0.8, cy - 0.9),
+      Offset(cx - 3.4, cy - 1.4),
+      Paint()
+        ..color = const Color(0xF2FFFFFF)
+        ..strokeWidth = 1.1
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawCircle(
+      Offset(cx - 1.8, cy),
+      1.0,
+      Paint()..color = const Color(0xFFDCFCE7),
+    );
+
     if (flash > 0.08) {
-      canvas.drawPath(
-        goliathHull,
-        Paint()..color = const Color(0xFFFF6D00).withOpacity(0.35 * flash),
-      );
-      canvas.drawPath(
-        goliathHull,
-        Paint()
-          ..color = const Color(0xFFFFB74D).withOpacity(0.80 * flash)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0,
-      );
+      final Paint flashFill =
+          Paint()..color = const Color(0xFFFF6D00).withOpacity(0.35 * flash);
+      final Paint flashStroke = Paint()
+        ..color = const Color(0xFFFFB74D).withOpacity(0.80 * flash)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.8;
+      for (final Path p in pincerPaths) {
+        canvas.drawPath(p, flashFill);
+        canvas.drawPath(p, flashStroke);
+      }
+      canvas.drawPath(centralHull, flashFill);
+      canvas.drawPath(centralHull, flashStroke);
+      for (final Path w in shoulderWingPaths) {
+        canvas.drawPath(w, flashFill);
+      }
     }
   }
 
@@ -4455,18 +4699,12 @@ class AlienShipComponent extends PositionComponent
       fireCooldown = max(0.0, fireCooldown - dt);
     }
 
-    final bool playerInRing;
-    if (gameRef.activeMap == GameMap.mapX1) {
-      playerInRing = !gameRef.player.inSafeZone &&
-          gameRef.player.position.x >= 0.0 &&
-          gameRef.player.position.x <= GameConstants.mapX1Size &&
-          gameRef.player.position.y >= 0.0 &&
-          gameRef.player.position.y <= GameConstants.mapX1Size;
-    } else {
-      final double playerDistFromOrigin = gameRef.player.position.length;
-      playerInRing = playerDistFromOrigin >= spec.minRadius - 120.0 &&
-          playerDistFromOrigin <= spec.maxRadius + 120.0;
-    }
+    final double mapSize = gameRef.activeMapSize;
+    final bool playerInRing = !gameRef.player.inSafeZone &&
+        gameRef.player.position.x >= 0.0 &&
+        gameRef.player.position.x <= mapSize &&
+        gameRef.player.position.y >= 0.0 &&
+        gameRef.player.position.y <= mapSize;
 
     if (isAggro && (gameRef.player.inSafeZone || !playerInRing)) {
       isAggro = false;
@@ -4508,51 +4746,34 @@ class AlienShipComponent extends PositionComponent
       }
     }
 
-    if (gameRef.activeMap == GameMap.mapX1) {
-      final double pad = effectiveRadius + 90.0;
-      position.x = position.x.clamp(pad, GameConstants.mapX1Size - pad);
-      position.y = position.y.clamp(pad, GameConstants.mapX1Size - pad);
-      final double dx = position.x - GameConstants.mapX1SafeZoneX;
-      final double dy = position.y - GameConstants.mapX1SafeZoneY;
+    final double pad = effectiveRadius + 90.0;
+    position.x = position.x.clamp(pad, mapSize - pad);
+    position.y = position.y.clamp(pad, mapSize - pad);
+    if (gameRef.currentSector.hasCentralSafeZone) {
+      final Vector2 safeCenter = gameRef.activeSafeZoneCenter;
+      final double dx = position.x - safeCenter.x;
+      final double dy = position.y - safeCenter.y;
       final double minDist =
-          GameConstants.mapX1SafeZoneRadius + effectiveRadius + 36.0;
+          gameRef.activeSafeZoneRadius + effectiveRadius + 40.0;
       final double dist = sqrt(dx * dx + dy * dy);
       if (dist < minDist) {
         if (dist < 0.001) {
-          position.setValues(
-            GameConstants.mapX1SafeZoneX + minDist,
-            GameConstants.mapX1SafeZoneY,
-          );
+          position.setValues(safeCenter.x + minDist, safeCenter.y);
         } else {
           final double scale = minDist / dist;
           position.setValues(
-            GameConstants.mapX1SafeZoneX + dx * scale,
-            GameConstants.mapX1SafeZoneY + dy * scale,
+            safeCenter.x + dx * scale,
+            safeCenter.y + dy * scale,
           );
         }
-      }
-    } else {
-      final double innerR = spec.minRadius + effectiveRadius + 26.0;
-      final double outerR = spec.maxRadius - effectiveRadius - 26.0;
-      final double d = position.length;
-      if (d < innerR && d > 0.001) {
-        position.scale(innerR / d);
-      } else if (d > outerR && d > 0.001) {
-        position.scale(outerR / d);
       }
     }
   }
 
   Vector2 _pickZoneWaypoint() {
-    if (gameRef.activeMap == GameMap.mapX1) {
-      return gameRef.randomPointInX1Playable(
-        margin: 280.0 + effectiveRadius,
-        safeZoneBuffer: 200.0 + effectiveRadius,
-      );
-    }
-    return gameRef.randomPointInAnnulus(
-      spec.minRadius + effectiveRadius + 50.0,
-      spec.maxRadius - effectiveRadius - 50.0,
+    return gameRef.randomPointInActiveSector(
+      margin: 280.0 + effectiveRadius,
+      safeZoneBuffer: 220.0 + effectiveRadius,
     );
   }
 
@@ -5311,14 +5532,15 @@ class JumpButtonComponent extends PositionComponent
 
   @override
   void render(Canvas canvas) {
-    if (!gameRef.isPlayerNearJumpGate) return;
+    final SectorPortal? portal = gameRef.nearestJumpPortal;
+    if (portal == null) return;
     final double pulse = 0.55 + 0.45 * sin(gameRef.elapsedTime * 7.5);
     final Offset c = Offset(size.x * 0.5, size.y * 0.5);
 
     canvas.drawCircle(
       c,
       30.0 + 3.0 * pulse,
-      Paint()..color = const Color(0xFF00E5FF).withOpacity(0.28 * pulse),
+      Paint()..color = portal.accentColor.withOpacity(0.30 * pulse),
     );
     canvas.drawCircle(
       c,
@@ -5327,10 +5549,10 @@ class JumpButtonComponent extends PositionComponent
         ..shader = ui.Gradient.radial(
           c,
           29.0,
-          const <Color>[
-            Color(0xEE00E5FF),
-            Color(0xDD0284C7),
-            Color(0xCC1E1B4B),
+          <Color>[
+            portal.accentColor.withOpacity(0.92),
+            const Color(0xDD0284C7),
+            const Color(0xCC1E1B4B),
           ],
           const <double>[0.0, 0.55, 1.0],
         ),
@@ -5343,14 +5565,25 @@ class JumpButtonComponent extends PositionComponent
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0 + 1.2 * pulse,
     );
-    final TextPaint tp = TextPaint(
+    TextPaint(
       style: const TextStyle(
         color: Colors.white,
-        fontSize: 12.0,
+        fontSize: 10.5,
+        fontWeight: FontWeight.w900,
+      ),
+    ).render(canvas, 'JUMP', Vector2(c.dx, c.dy - 6.0), anchor: Anchor.center);
+    TextPaint(
+      style: const TextStyle(
+        color: Color(0xFFE0F7FA),
+        fontSize: 9.2,
         fontWeight: FontWeight.bold,
       ),
+    ).render(
+      canvas,
+      portal.targetSectorId,
+      Vector2(c.dx, c.dy + 7.5),
+      anchor: Anchor.center,
     );
-    tp.render(canvas, 'JUMP', Vector2(c.dx, c.dy), anchor: Anchor.center);
   }
 }
 
@@ -5762,6 +5995,69 @@ class HangarButtonComponent extends PositionComponent
   }
 }
 
+class GalaxyMapButtonComponent extends PositionComponent
+    with TapCallbacks, HasGameRef<DarkOrbitGame> {
+  GalaxyMapButtonComponent() : super(size: Vector2(76.0, 38.0));
+
+  @override
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
+    final double preferredX = 604.0;
+    final double maxX = max(510.0, size.x - 142.0 - 84.0);
+    position = Vector2(min(preferredX, maxX), 14.0);
+  }
+
+  @override
+  void onTapDown(TapDownEvent event) {
+    gameRef.toggleGalaxyMap();
+  }
+
+  @override
+  void render(Canvas canvas) {
+    final bool hasRoute = gameRef.plottedRoute.length >= 2;
+    final Color accent =
+        hasRoute ? const Color(0xFFFACC15) : const Color(0xFF00E5FF);
+    final RRect rr = RRect.fromRectAndRadius(
+      Offset.zero & Size(size.x, size.y),
+      const Radius.circular(8.0),
+    );
+    canvas.drawRRect(rr, Paint()..color = const Color(0xCC0A182D));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6,
+    );
+    TextPaint(
+      style: TextStyle(
+        color: accent,
+        fontSize: 10.5,
+        fontWeight: FontWeight.w800,
+      ),
+    ).render(
+      canvas,
+      'GALAXY',
+      Vector2(size.x * 0.5, hasRoute ? 13.0 : size.y * 0.5),
+      anchor: Anchor.center,
+    );
+    if (hasRoute) {
+      TextPaint(
+        style: const TextStyle(
+          color: Color(0xFFE2E8F0),
+          fontSize: 8.6,
+          fontWeight: FontWeight.bold,
+        ),
+      ).render(
+        canvas,
+        '→ ${gameRef.nextRouteHopSectorId ?? ''}',
+        Vector2(size.x * 0.5, 26.5),
+        anchor: Anchor.center,
+      );
+    }
+  }
+}
+
 class MissionHudComponent extends PositionComponent
     with TapCallbacks, HasGameRef<DarkOrbitGame> {
   MissionHudComponent() : super(size: Vector2(340.0, 28.0));
@@ -5973,14 +6269,12 @@ class TacticalHudComponent extends PositionComponent
       anchor: Anchor.center,
     );
 
-    // Active Map Name Badge + Zone Indicator + Radiation Warning row
-    final bool isMapX1 = gameRef.activeMap == GameMap.mapX1;
-    final Color mapColor =
-        isMapX1 ? const Color(0xFFA5B4FC) : const Color(0xFF00E5FF);
-    final Color mapBg =
-        isMapX1 ? const Color(0xCC1E1B4B) : const Color(0xCC0A192F);
+    // Active Sector Badge + Zone Risk Indicator + Border Radiation Warning row
+    final SectorNode sector = gameRef.currentSector;
+    final Color mapColor = sector.nodeColor;
+    final Color mapBg = sector.zoneType.badgeBgColor;
     final RRect mapChip = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(0.0, 45.0, 74.0, 22.0),
+      const Rect.fromLTWH(0.0, 45.0, 76.0, 22.0),
       const Radius.circular(6.0),
     );
     canvas.drawRRect(mapChip, Paint()..color = mapBg);
@@ -5999,37 +6293,30 @@ class TacticalHudComponent extends PositionComponent
       ),
     ).render(
       canvas,
-      gameRef.activeMap.displayName,
-      Vector2(37.0, 56.0),
+      'SEC ${sector.id}',
+      Vector2(38.0, 56.0),
       anchor: Anchor.center,
     );
 
     final String zoneLabel;
     final Color zoneColor;
     final Color zoneBg;
-    if (isMapX1) {
-      if (gameRef.player.inSafeZone) {
-        zoneLabel = 'SAFE ZONE';
-        zoneColor = const Color(0xFF00E5FF);
-        zoneBg = const Color(0xCC062838);
-      } else if (gameRef.player.isTakingZoneRadiation) {
-        zoneLabel = 'RADIATION ZONE';
-        zoneColor = const Color(0xFFFF2E4C);
-        zoneBg = const Color(0xDD7F1D1D);
-      } else {
-        zoneLabel = 'SECTOR X-1';
-        zoneColor = const Color(0xFF818CF8);
-        zoneBg = const Color(0xCC131338);
-      }
+    if (gameRef.player.inSafeZone) {
+      zoneLabel = sector.isNucleus ? 'BLACK MARKET SAFE' : 'SAFE ZONE';
+      zoneColor = const Color(0xFF00E5FF);
+      zoneBg = const Color(0xCC062838);
+    } else if (gameRef.player.isTakingZoneRadiation) {
+      zoneLabel = 'BORDER RADIATION';
+      zoneColor = const Color(0xFFFF2E4C);
+      zoneBg = const Color(0xDD7F1D1D);
     } else {
-      final SpaceZoneInfo zoneInfo = SpaceZoneInfo.of(gameRef.currentZone);
-      zoneLabel = zoneInfo.label;
-      zoneColor = zoneInfo.color;
-      zoneBg = zoneInfo.bgColor;
+      zoneLabel = sector.zoneType.shortLabel;
+      zoneColor = sector.zoneType.badgeColor;
+      zoneBg = sector.zoneType.badgeBgColor;
     }
 
     final RRect zoneChip = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(80.0, 45.0, 126.0, 22.0),
+      const Rect.fromLTWH(82.0, 45.0, 146.0, 22.0),
       const Radius.circular(6.0),
     );
     canvas.drawRRect(zoneChip, Paint()..color = zoneBg);
@@ -6043,34 +6330,36 @@ class TacticalHudComponent extends PositionComponent
     TextPaint(
       style: TextStyle(
         color: zoneColor,
-        fontSize: 9.8,
+        fontSize: 9.4,
         fontWeight: FontWeight.bold,
       ),
-    ).render(canvas, zoneLabel, Vector2(88.0, 50.0));
+    ).render(canvas, zoneLabel, Vector2(90.0, 50.0));
 
-    if (gameRef.player.isTakingZoneRadiation) {
-      final String radMsg = gameRef.player.requiredChipWarning != null
-          ? 'RAD • NEED ${gameRef.player.requiredChipWarning}'
-          : 'BORDER RADIATION!';
-      final RRect radChip = RRect.fromRectAndRadius(
-        const Rect.fromLTWH(212.0, 45.0, 128.0, 22.0),
+    if (gameRef.nextRouteHopSectorId != null) {
+      final int hops = gameRef.plottedRoute.length - 1;
+      final RRect routeChip = RRect.fromRectAndRadius(
+        const Rect.fromLTWH(234.0, 45.0, 106.0, 22.0),
         const Radius.circular(6.0),
       );
-      canvas.drawRRect(radChip, Paint()..color = const Color(0xDD7F1D1D));
+      canvas.drawRRect(routeChip, Paint()..color = const Color(0xCC06253A));
       canvas.drawRRect(
-        radChip,
+        routeChip,
         Paint()
-          ..color = const Color(0xFFFF2E4C)
+          ..color = const Color(0xFF00E5FF)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2,
+          ..strokeWidth = 1.1,
       );
       TextPaint(
         style: const TextStyle(
-          color: Colors.white,
-          fontSize: 9.4,
+          color: Color(0xFF00E5FF),
+          fontSize: 9.0,
           fontWeight: FontWeight.bold,
         ),
-      ).render(canvas, radMsg, Vector2(218.0, 50.0));
+      ).render(
+        canvas,
+        '→ ${gameRef.nextRouteHopSectorId} (${hops}J)',
+        Vector2(241.0, 50.0),
+      );
     }
   }
 }
@@ -6100,18 +6389,13 @@ class MinimapComponent extends PositionComponent
 
     final double playerX = gameRef.player.position.x;
     final double playerY = gameRef.player.position.y;
-    final double playerOriginDist = sqrt(playerX * playerX + playerY * playerY);
-    final Offset baseCenter = Offset(
-      center.dx - playerX * scale,
-      center.dy - playerY * scale,
-    );
 
-    final bool isMapX1 = gameRef.activeMap == GameMap.mapX1;
+    final SectorNode sector = gameRef.currentSector;
+    final double mapSize = sector.mapSize;
     canvas.drawCircle(
       center,
       radarR,
-      Paint()
-        ..color = isMapX1 ? const Color(0xDC080720) : const Color(0xCC0B1324),
+      Paint()..color = const Color(0xDC080D1E),
     );
 
     final Path clipCircle = Path()
@@ -6136,164 +6420,100 @@ class MinimapComponent extends PositionComponent
       gridPaint,
     );
 
-    if (isMapX1) {
-      // Straight red square edge walls & outer radiation fill when approaching MAP X-1 borders
-      final double leftWallX = center.dx + (0.0 - playerX) * scale;
-      final double rightWallX =
-          center.dx + (GameConstants.mapX1Size - playerX) * scale;
-      final double topWallY = center.dy + (0.0 - playerY) * scale;
-      final double bottomWallY =
-          center.dy + (GameConstants.mapX1Size - playerY) * scale;
+    // Straight red square edge walls & outer radiation fill when approaching borders
+    final double leftWallX = center.dx + (0.0 - playerX) * scale;
+    final double rightWallX = center.dx + (mapSize - playerX) * scale;
+    final double topWallY = center.dy + (0.0 - playerY) * scale;
+    final double bottomWallY = center.dy + (mapSize - playerY) * scale;
 
-      final Paint wallRad = Paint()..color = const Color(0x36FF1744);
-      if (leftWallX > 0.0) {
-        canvas.drawRect(
-          Rect.fromLTWH(0.0, 0.0, min(size.x, leftWallX), size.y),
-          wallRad,
-        );
-      }
-      if (rightWallX < size.x) {
-        final double rx = max(0.0, rightWallX);
-        canvas.drawRect(
-          Rect.fromLTWH(rx, 0.0, max(0.0, size.x - rx), size.y),
-          wallRad,
-        );
-      }
-      if (topWallY > 0.0) {
-        canvas.drawRect(
-          Rect.fromLTWH(0.0, 0.0, size.x, min(size.y, topWallY)),
-          wallRad,
-        );
-      }
-      if (bottomWallY < size.y) {
-        final double by = max(0.0, bottomWallY);
-        canvas.drawRect(
-          Rect.fromLTWH(0.0, by, size.x, max(0.0, size.y - by)),
-          wallRad,
-        );
-      }
-
+    final Paint wallRad = Paint()..color = const Color(0x36FF1744);
+    if (leftWallX > 0.0) {
       canvas.drawRect(
-        Rect.fromLTWH(
-          leftWallX,
-          topWallY,
-          GameConstants.mapX1Size * scale,
-          GameConstants.mapX1Size * scale,
-        ),
-        Paint()
-          ..color = const Color(0xF0FF2E4C)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.4,
+        Rect.fromLTWH(0.0, 0.0, min(size.x, leftWallX), size.y),
+        wallRad,
       );
+    }
+    if (rightWallX < size.x) {
+      final double rx = max(0.0, rightWallX);
+      canvas.drawRect(
+        Rect.fromLTWH(rx, 0.0, max(0.0, size.x - rx), size.y),
+        wallRad,
+      );
+    }
+    if (topWallY > 0.0) {
+      canvas.drawRect(
+        Rect.fromLTWH(0.0, 0.0, size.x, min(size.y, topWallY)),
+        wallRad,
+      );
+    }
+    if (bottomWallY < size.y) {
+      final double by = max(0.0, bottomWallY);
+      canvas.drawRect(
+        Rect.fromLTWH(0.0, by, size.x, max(0.0, size.y - by)),
+        wallRad,
+      );
+    }
 
-      // Corner Safe Zone & Return Portal (1200, 1200)
-      final double dxSafe = GameConstants.mapX1SafeZoneX - playerX;
-      final double dySafe = GameConstants.mapX1SafeZoneY - playerY;
+    canvas.drawRect(
+      Rect.fromLTWH(
+        leftWallX,
+        topWallY,
+        mapSize * scale,
+        mapSize * scale,
+      ),
+      Paint()
+        ..color = const Color(0xF0FF2E4C)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.4,
+    );
+
+    // Central Safe Zone when within radar view (Cities, Level 1, Nucleus 0-0 Black Market)
+    if (sector.hasCentralSafeZone) {
+      final Vector2 safeWorld = gameRef.activeSafeZoneCenter;
+      final double dxSafe = safeWorld.x - playerX;
+      final double dySafe = safeWorld.y - playerY;
       if (sqrt(dxSafe * dxSafe + dySafe * dySafe) <=
-          viewRadius + GameConstants.mapX1SafeZoneRadius + 120.0) {
+          viewRadius + sector.safeZoneRadius + 120.0) {
         final Offset safeCenter =
             Offset(center.dx + dxSafe * scale, center.dy + dySafe * scale);
-        final double safeR = GameConstants.mapX1SafeZoneRadius * scale;
+        final double safeR = sector.safeZoneRadius * scale;
         canvas.drawCircle(
           safeCenter,
           safeR,
-          Paint()..color = const Color(0x3800E5FF),
+          Paint()..color = const Color(0x3000E5FF),
         );
         canvas.drawCircle(
           safeCenter,
           safeR,
           Paint()
-            ..color = const Color(0xDD00E5FF)
+            ..color = sector.isNucleus
+                ? const Color(0xFFFACC15)
+                : const Color(0xDD00E5FF)
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
-        );
-        canvas.drawCircle(
-          safeCenter,
-          4.4,
-          Paint()
-            ..color = const Color(0xFF00E5FF).withOpacity(0.5 + 0.45 * pulse)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
+            ..strokeWidth = 1.5,
         );
         canvas.drawCircle(safeCenter, 2.2, Paint()..color = Colors.white);
       }
-    } else {
-      // Curved arcs of Sector boundaries & outer red border when within 4,500u radar view
-      if ((playerOriginDist - GameConstants.zone1MaxRadius).abs() <=
-          viewRadius + 250.0) {
-        canvas.drawCircle(
-          baseCenter,
-          GameConstants.zone1MaxRadius * scale,
-          Paint()
-            ..color = const Color(0x994ADE80)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
-        );
-      }
-      if ((playerOriginDist - GameConstants.zone2MaxRadius).abs() <=
-          viewRadius + 250.0) {
-        canvas.drawCircle(
-          baseCenter,
-          GameConstants.zone2MaxRadius * scale,
-          Paint()
-            ..color = const Color(0x99FACC15)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
-        );
-      }
-      if ((playerOriginDist - GameConstants.zone3MaxRadius).abs() <=
-          viewRadius + 250.0) {
-        canvas.drawCircle(
-          baseCenter,
-          GameConstants.zone3MaxRadius * scale,
-          Paint()
-            ..color = const Color(0x99FB923C)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
-        );
-      }
-      if ((playerOriginDist - GameConstants.mapRadius).abs() <=
-          viewRadius + 250.0) {
-        canvas.drawCircle(
-          baseCenter,
-          GameConstants.mapRadius * scale,
-          Paint()
-            ..color = const Color(0xEEFF2E4C)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.4,
-        );
-      }
+    }
 
-      // Central Safe Zone Base & Jump Gate Portal (220, 0)
-      if (playerOriginDist <= viewRadius + GameConstants.safeZoneRadius + 120.0) {
-        final double safeR = GameConstants.safeZoneRadius * scale;
-        canvas.drawCircle(
-          baseCenter,
-          safeR,
-          Paint()..color = const Color(0x3800E5FF),
-        );
-        canvas.drawCircle(
-          baseCenter,
-          safeR,
-          Paint()
-            ..color = const Color(0xDD00E5FF)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.4,
-        );
-        canvas.drawCircle(baseCenter, 2.6, Paint()..color = Colors.white);
-        final Offset gatePt = Offset(
-          center.dx + (GameConstants.mainJumpGateX - playerX) * scale,
-          center.dy + (GameConstants.mainJumpGateY - playerY) * scale,
-        );
-        canvas.drawCircle(
-          gatePt,
-          3.6,
-          Paint()
-            ..color = const Color(0xFF00E5FF).withOpacity(0.55 + 0.4 * pulse)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.3,
-        );
-      }
+    // All active sector portals visible on local radar
+    final String? nextHop = gameRef.nextRouteHopSectorId;
+    for (final SectorPortal portal in gameRef.activePortals) {
+      final double dxP = portal.worldX - playerX;
+      final double dyP = portal.worldY - playerY;
+      if (sqrt(dxP * dxP + dyP * dyP) > viewRadius + 240.0) continue;
+      final Offset pOff = Offset(center.dx + dxP * scale, center.dy + dyP * scale);
+      final bool isNext = portal.targetSectorId == nextHop;
+      canvas.drawCircle(
+        pOff,
+        isNext ? 5.2 + 1.5 * pulse : 4.2,
+        Paint()
+          ..color = (isNext ? const Color(0xFF00E5FF) : portal.accentColor)
+              .withOpacity(0.55 + 0.4 * pulse)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = isNext ? 1.8 : 1.3,
+      );
+      canvas.drawCircle(pOff, 1.9, Paint()..color = Colors.white);
     }
 
     // Nearby Bonus & Cargo Boxes within 4,500u radius

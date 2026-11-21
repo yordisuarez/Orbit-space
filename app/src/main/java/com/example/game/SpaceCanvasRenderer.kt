@@ -72,14 +72,13 @@ fun DrawScope.renderSpaceWorld(
     val maxX = camX + halfWorldW + cullMargin
     val minY = camY - halfWorldH - cullMargin
     val maxY = camY + halfWorldH + cullMargin
-    val camDistFromOrigin = hypot(camX, camY)
+    val sector = engine.currentSector
+    val mapSize = sector.mapSize
 
-    val isMapX1 = engine.activeMap == GameMap.MAP_X1
+    // 1. Deep void space background tinted to the active sector's zone risk profile
+    drawRect(color = sector.zoneType.spaceBackgroundColor, size = size)
 
-    // 1. Deep void space background (distinct deep-indigo space tint in MAP X-1)
-    drawRect(color = if (isMapX1) Color(0xFF07061C) else SpaceVoid, size = size)
-
-    // 2. World-space entities, culled starfield, sector layout, Jump Gate & combat effects
+    // 2. World-space entities, culled starfield, sector layout, Jump Gates & combat effects
     withTransform({
         translate(left = viewportW * 0.5f, top = viewportH * 0.5f)
         scale(scaleX = worldScale, scaleY = worldScale, pivot = Offset.Zero)
@@ -88,28 +87,31 @@ fun DrawScope.renderSpaceWorld(
         drawWorldStarfield(engine, minX, maxX, minY, maxY)
         drawNebulae(engine, minX, maxX, minY, maxY)
 
-        if (isMapX1) {
-            drawSquareX1GridAndBorder(engine, minX, maxX, minY, maxY)
-            val distToX1Safe = hypot(
-                camX - GameConfig.MAP_X1_SAFE_ZONE_X,
-                camY - GameConfig.MAP_X1_SAFE_ZONE_Y
-            )
-            if (distToX1Safe <= GameConfig.MAP_X1_SAFE_ZONE_RADIUS + halfDiag + 140f) {
-                drawX1CornerSafeZone(engine.elapsedTime)
-            }
-        } else {
-            drawSectorGridAndZoneRings(camDistFromOrigin, halfDiag)
+        drawSquareSectorGridAndBorder(
+            engine = engine,
+            mapSize = mapSize,
+            accentColor = sector.nodeColor,
+            minX = minX,
+            maxX = maxX,
+            minY = minY,
+            maxY = maxY
+        )
 
-            if (camDistFromOrigin <= GameConfig.SAFE_ZONE_RADIUS + halfDiag + 140f) {
-                drawSafeZoneAndStation(engine.elapsedTime)
-            }
-
-            if (camDistFromOrigin + halfDiag >= GameConfig.MAP_RADIUS - 160f) {
-                drawRadiationBorder(engine)
+        if (sector.hasCentralSafeZone && sector.safeZoneRadius > 0f) {
+            val (sx, sy) = engine.activeSafeZoneCenter()
+            val distToSafe = hypot(camX - sx, camY - sy)
+            if (distToSafe <= sector.safeZoneRadius + halfDiag + 160f) {
+                drawCentralSectorSafeZone(
+                    center = Offset(sx, sy),
+                    safeR = sector.safeZoneRadius,
+                    sector = sector,
+                    time = engine.elapsedTime,
+                    popupPaint = popupPaint
+                )
             }
         }
 
-        drawJumpGatePortal(engine, popupPaint, minX, maxX, minY, maxY)
+        drawSectorJumpGatePortals(engine, popupPaint, minX, maxX, minY, maxY)
         drawLootBoxes(engine, minX, maxX, minY, maxY)
 
         if (engine.player.isAlive) {
@@ -362,17 +364,17 @@ private fun DrawScope.drawZoneBorderRing(
     )
 }
 
-private fun DrawScope.drawSquareX1GridAndBorder(
+private fun DrawScope.drawSquareSectorGridAndBorder(
     engine: SpaceGameEngine,
+    mapSize: Float,
+    accentColor: Color,
     minX: Float,
     maxX: Float,
     minY: Float,
     maxY: Float
 ) {
-    val mapSize = GameConfig.MAP_X1_SIZE
     val step = 1000f
 
-    // Faint sci-fi square coordinate grid lines (viewport culled)
     val startGx = (kotlin.math.floor((minX.coerceAtLeast(0f)) / step) * step).coerceAtLeast(0f)
     val endGx = (kotlin.math.ceil((maxX.coerceAtMost(mapSize)) / step) * step).coerceAtMost(mapSize)
     val startGy = (kotlin.math.floor((minY.coerceAtLeast(0f)) / step) * step).coerceAtLeast(0f)
@@ -389,7 +391,7 @@ private fun DrawScope.drawSquareX1GridAndBorder(
             if (gx > 0f && gx < mapSize) {
                 val isMajor = ((gx / step).toInt() % 2 == 0)
                 drawLine(
-                    color = if (isMajor) Color(0x20818CF8) else Color(0x126366F1),
+                    color = accentColor.copy(alpha = if (isMajor) 0.14f else 0.07f),
                     start = Offset(gx, clipTop),
                     end = Offset(gx, clipBottom),
                     strokeWidth = if (isMajor) 1.5f else 1.0f
@@ -405,7 +407,7 @@ private fun DrawScope.drawSquareX1GridAndBorder(
             if (gy > 0f && gy < mapSize) {
                 val isMajor = ((gy / step).toInt() % 2 == 0)
                 drawLine(
-                    color = if (isMajor) Color(0x20818CF8) else Color(0x126366F1),
+                    color = accentColor.copy(alpha = if (isMajor) 0.14f else 0.07f),
                     start = Offset(clipLeft, gy),
                     end = Offset(clipRight, gy),
                     strokeWidth = if (isMajor) 1.5f else 1.0f
@@ -415,109 +417,129 @@ private fun DrawScope.drawSquareX1GridAndBorder(
         }
     }
 
-    // Outer Crimson Radiation Zone shading beyond the 0..14000 square edges
+    // Outer Crimson Radiation Zone shading beyond the 0..mapSize square edges
     val radBand = GameConfig.MAP_X1_RADIATION_OUTER_BUFFER + 640f
     val radFill = Color(0x26FF1744)
     if (minY < 0f) {
-        drawRect(
-            color = radFill,
-            topLeft = Offset(-radBand, -radBand),
-            size = Size(mapSize + radBand * 2f, radBand)
-        )
+        drawRect(color = radFill, topLeft = Offset(-radBand, -radBand), size = Size(mapSize + radBand * 2f, radBand))
     }
     if (maxY > mapSize) {
-        drawRect(
-            color = radFill,
-            topLeft = Offset(-radBand, mapSize),
-            size = Size(mapSize + radBand * 2f, radBand)
-        )
+        drawRect(color = radFill, topLeft = Offset(-radBand, mapSize), size = Size(mapSize + radBand * 2f, radBand))
     }
     if (minX < 0f) {
-        drawRect(
-            color = radFill,
-            topLeft = Offset(-radBand, 0f),
-            size = Size(radBand, mapSize)
-        )
+        drawRect(color = radFill, topLeft = Offset(-radBand, 0f), size = Size(radBand, mapSize))
     }
     if (maxX > mapSize) {
-        drawRect(
-            color = radFill,
-            topLeft = Offset(mapSize, 0f),
-            size = Size(radBand, mapSize)
-        )
+        drawRect(color = radFill, topLeft = Offset(mapSize, 0f), size = Size(radBand, mapSize))
     }
 
-    // Glowing Red Square Radiation Zone Border along all 4 outer edges
     val pulse = 0.65f + 0.35f * sin(engine.elapsedTime * 5.2f)
-    val glowStroke = Stroke(width = 24f)
-    val mainStroke = Stroke(width = 5f)
-    val innerDash = Stroke(
-        width = 2.4f,
-        pathEffect = PathEffect.dashPathEffect(floatArrayOf(28f, 18f), engine.elapsedTime * 42f)
-    )
     drawRect(
         color = CrimsonRadiation.copy(alpha = 0.24f * pulse),
         topLeft = Offset.Zero,
         size = Size(mapSize, mapSize),
-        style = glowStroke
+        style = Stroke(width = 24f)
     )
     drawRect(
         color = CrimsonDanger.copy(alpha = 0.92f),
         topLeft = Offset.Zero,
         size = Size(mapSize, mapSize),
-        style = mainStroke
+        style = Stroke(width = 5f)
     )
     drawRect(
         color = Color(0xFFFF8A80).copy(alpha = 0.7f * pulse),
         topLeft = Offset(14f, 14f),
         size = Size(mapSize - 28f, mapSize - 28f),
-        style = innerDash
+        style = Stroke(
+            width = 2.4f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(28f, 18f), engine.elapsedTime * 42f)
+        )
     )
 }
 
-private fun DrawScope.drawX1CornerSafeZone(time: Float) {
-    val safeCenter = Offset(GameConfig.MAP_X1_SAFE_ZONE_X, GameConfig.MAP_X1_SAFE_ZONE_Y)
-    val safeR = GameConfig.MAP_X1_SAFE_ZONE_RADIUS
+private fun DrawScope.drawCentralSectorSafeZone(
+    center: Offset,
+    safeR: Float,
+    sector: SectorNode,
+    time: Float,
+    popupPaint: Paint
+) {
     val pulse = 0.72f + 0.28f * sin(time * 3.0f)
+    val ringColor = if (sector.isNucleus) AmberCredits else sector.nodeColor
 
-    // Soft cyan/indigo Safe Zone dome field
     drawCircle(
         brush = Brush.radialGradient(
             colors = listOf(
                 CyanLaser.copy(alpha = 0.14f),
-                Color(0xFF6366F1).copy(alpha = 0.06f),
-                CyanLaser.copy(alpha = 0.02f)
+                ringColor.copy(alpha = 0.08f),
+                Color.Transparent
             ),
-            center = safeCenter,
+            center = center,
             radius = safeR
         ),
         radius = safeR,
-        center = safeCenter
+        center = center
     )
     drawCircle(
-        color = CyanLaser.copy(alpha = 0.20f * pulse),
+        color = ringColor.copy(alpha = 0.22f * pulse),
         radius = safeR,
-        center = safeCenter,
+        center = center,
         style = Stroke(width = 16f)
     )
     drawCircle(
-        color = CyanLaser.copy(alpha = 0.75f),
+        color = CyanLaser.copy(alpha = 0.80f),
         radius = safeR,
-        center = safeCenter,
+        center = center,
         style = Stroke(
             width = 3.2f,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(22f, 14f), time * 26f)
         )
     )
-    drawCircle(
-        color = Color(0xFF818CF8).copy(alpha = 0.35f),
-        radius = safeR - 18f,
-        center = safeCenter,
-        style = Stroke(width = 1.4f)
-    )
+    if (sector.isNucleus) {
+        drawCircle(
+            color = AmberCredits.copy(alpha = 0.65f),
+            radius = safeR + 24f,
+            center = center,
+            style = Stroke(width = 2.4f)
+        )
+    }
+
+    // Rotating central station hub
+    rotate(degrees = time * 11f, pivot = center) {
+        drawCircle(color = Color(0xFF16243D), radius = 78f, center = center, style = Stroke(width = 12f))
+        drawCircle(color = ringColor.copy(alpha = 0.8f), radius = 84f, center = center, style = Stroke(width = 2.0f))
+        for (i in 0 until 4) {
+            val a = i * (PI.toFloat() * 0.5f)
+            val p1 = Offset(center.x + cos(a) * 34f, center.y + sin(a) * 34f)
+            val p2 = Offset(center.x + cos(a) * 108f, center.y + sin(a) * 108f)
+            drawLine(Color(0xFF334155), p1, p2, strokeWidth = 10f, cap = StrokeCap.Round)
+            drawLine(ringColor.copy(alpha = 0.85f), p1, p2, strokeWidth = 2.2f, cap = StrokeCap.Round)
+            drawCircle(ringColor, radius = 4.2f, center = p2)
+        }
+    }
+    drawCircle(color = Color(0xFF0F1C33), radius = 40f, center = center)
+    drawCircle(color = ringColor, radius = 40f, center = center, style = Stroke(width = 2.2f))
+    drawCircle(color = CyanLaser, radius = 12f * (0.9f + 0.1f * pulse), center = center)
+    drawCircle(color = Color.White, radius = 5f, center = center)
+
+    val stationTitle = when {
+        sector.isNucleus -> "BLACK MARKET • SAFE ZONE"
+        sector.isCapitalCity -> "${sector.id} CAPITAL BASE • MARKET • VAULT"
+        else -> "${sector.id} SAFE ZONE OUTPOST"
+    }
+    val nativeCanvas = drawContext.canvas.nativeCanvas
+    popupPaint.textSize = 15f
+    popupPaint.color = android.graphics.Color.argb(220, 4, 7, 17)
+    nativeCanvas.drawText(stationTitle, center.x + 1.2f, center.y + 134f, popupPaint)
+    popupPaint.color = if (sector.isNucleus) {
+        android.graphics.Color.rgb(251, 191, 36)
+    } else {
+        android.graphics.Color.rgb(56, 189, 248)
+    }
+    nativeCanvas.drawText(stationTitle, center.x, center.y + 133f, popupPaint)
 }
 
-private fun DrawScope.drawJumpGatePortal(
+private fun DrawScope.drawSectorJumpGatePortals(
     engine: SpaceGameEngine,
     popupPaint: Paint,
     minX: Float,
@@ -525,146 +547,134 @@ private fun DrawScope.drawJumpGatePortal(
     minY: Float,
     maxY: Float
 ) {
-    val (gx, gy) = engine.activeJumpGatePosition()
-    if (gx + 110f < minX || gx - 110f > maxX || gy + 110f < minY || gy - 110f > maxY) {
-        return
-    }
-
-    val center = Offset(gx, gy)
+    val nearest = engine.nearestJumpPortal()
+    val nextHop = engine.nextRouteHopSectorId
     val t = engine.elapsedTime
     val pulse = 0.72f + 0.28f * sin(t * 4.4f)
-    val nearGate = engine.isPlayerNearJumpGate()
     val outerR = 46f
     val innerR = 32f
-
-    // Ambient energy bloom (intensifies when player flies within 120 units)
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(
-                CyanLaser.copy(alpha = if (nearGate) 0.48f else 0.30f),
-                Color(0xFF6366F1).copy(alpha = if (nearGate) 0.26f else 0.16f),
-                Color.Transparent
-            ),
-            center = center,
-            radius = if (nearGate) 96f else 80f
-        ),
-        radius = if (nearGate) 96f else 80f,
-        center = center
-    )
-
-    // Subtle 120-unit interaction proximity ring when player approaches
-    if (nearGate) {
-        drawCircle(
-            color = CyanLaser.copy(alpha = 0.35f * pulse),
-            radius = GameConfig.JUMP_GATE_INTERACT_RADIUS,
-            center = center,
-            style = Stroke(
-                width = 1.8f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), -t * 36f)
-            )
-        )
-    }
-
-    // Inner swirling warp vortex core
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(
-                Color.White.copy(alpha = 0.85f * pulse),
-                CyanLaser.copy(alpha = 0.65f),
-                Color(0xFF4F46E5).copy(alpha = 0.45f),
-                Color(0xFF0A1026).copy(alpha = 0.72f)
-            ),
-            center = center,
-            radius = innerR
-        ),
-        radius = innerR,
-        center = center
-    )
-
-    // Rotating metallic outer ring with 3 glowing plasma arcs and 6 anchor pylons
-    rotate(degrees = t * 34f, pivot = center) {
-        drawCircle(
-            color = Color(0xFF1E293B),
-            radius = outerR,
-            center = center,
-            style = Stroke(width = 7.5f)
-        )
-        drawCircle(
-            color = Color(0xFF94A3B8).copy(alpha = 0.78f),
-            radius = outerR + 3.2f,
-            center = center,
-            style = Stroke(width = 1.4f)
-        )
-        drawCircle(
-            color = CyanLaser.copy(alpha = 0.75f),
-            radius = outerR - 3.6f,
-            center = center,
-            style = Stroke(width = 1.5f)
-        )
-        val arcTopLeft = Offset(gx - outerR, gy - outerR)
-        val arcSize = Size(outerR * 2f, outerR * 2f)
-        for (i in 0 until 3) {
-            drawArc(
-                color = CyanLaser.copy(alpha = 0.88f),
-                startAngle = i * 120f + 12f,
-                sweepAngle = 72f,
-                useCenter = false,
-                topLeft = arcTopLeft,
-                size = arcSize,
-                style = Stroke(width = 3.2f, cap = StrokeCap.Round)
-            )
-        }
-        for (i in 0 until 6) {
-            val a = i * (PI.toFloat() / 3f)
-            val px = gx + cos(a) * outerR
-            val py = gy + sin(a) * outerR
-            drawCircle(color = Color(0xFF0F172A), radius = 5.4f, center = Offset(px, py))
-            drawCircle(
-                color = if (i % 2 == 0) CyanLaser else Color(0xFFA78BFA),
-                radius = 3.0f,
-                center = Offset(px, py)
-            )
-        }
-    }
-
-    // Counter-rotating inner holographic energy ring
-    rotate(degrees = -t * 58f, pivot = center) {
-        drawCircle(
-            color = Color(0xFFA78BFA).copy(alpha = 0.82f),
-            radius = innerR + 3f,
-            center = center,
-            style = Stroke(
-                width = 2.2f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f)
-            )
-        )
-        val innerArcTopLeft = Offset(gx - (innerR - 6f), gy - (innerR - 6f))
-        val innerArcSize = Size((innerR - 6f) * 2f, (innerR - 6f) * 2f)
-        for (i in 0 until 2) {
-            drawArc(
-                color = Color.White.copy(alpha = 0.85f * pulse),
-                startAngle = i * 180f,
-                sweepAngle = 82f,
-                useCenter = false,
-                topLeft = innerArcTopLeft,
-                size = innerArcSize,
-                style = Stroke(width = 2.0f, cap = StrokeCap.Round)
-            )
-        }
-    }
-
-    // Subtle crisp floating portal label ("GATE: X-1" or "GATE: BASE")
-    val label = engine.activeMap.gateLabel
     val nativeCanvas = drawContext.canvas.nativeCanvas
-    popupPaint.textSize = 13.5f
-    popupPaint.color = android.graphics.Color.argb(215, 4, 7, 17)
-    nativeCanvas.drawText(label, gx + 1f, gy + outerR + 22f, popupPaint)
-    popupPaint.color = if (nearGate) {
-        android.graphics.Color.rgb(224, 247, 250)
-    } else {
-        android.graphics.Color.argb(220, 56, 189, 248)
+
+    for (portal in engine.activePortals) {
+        val gx = portal.worldX
+        val gy = portal.worldY
+        if (gx + 130f < minX || gx - 130f > maxX || gy + 130f < minY || gy - 130f > maxY) {
+            continue
+        }
+
+        val center = Offset(gx, gy)
+        val nearGate = nearest?.targetSectorId == portal.targetSectorId
+        val isRouteTarget = nextHop == portal.targetSectorId
+        val accent = if (isRouteTarget) CyanLaser else portal.accentColor
+
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    accent.copy(alpha = if (nearGate || isRouteTarget) 0.50f else 0.30f),
+                    Color(0xFF6366F1).copy(alpha = if (nearGate) 0.26f else 0.14f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = if (nearGate || isRouteTarget) 104f else 82f
+            ),
+            radius = if (nearGate || isRouteTarget) 104f else 82f,
+            center = center
+        )
+
+        if (nearGate || isRouteTarget) {
+            drawCircle(
+                color = accent.copy(alpha = 0.40f * pulse),
+                radius = GameConfig.JUMP_GATE_INTERACT_RADIUS,
+                center = center,
+                style = Stroke(
+                    width = if (isRouteTarget) 2.2f else 1.8f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), -t * 36f)
+                )
+            )
+        }
+
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.85f * pulse),
+                    accent.copy(alpha = 0.65f),
+                    Color(0xFF4F46E5).copy(alpha = 0.45f),
+                    Color(0xFF0A1026).copy(alpha = 0.72f)
+                ),
+                center = center,
+                radius = innerR
+            ),
+            radius = innerR,
+            center = center
+        )
+
+        rotate(degrees = t * 34f, pivot = center) {
+            drawCircle(color = Color(0xFF1E293B), radius = outerR, center = center, style = Stroke(width = 7.5f))
+            drawCircle(color = Color(0xFF94A3B8).copy(alpha = 0.78f), radius = outerR + 3.2f, center = center, style = Stroke(width = 1.4f))
+            drawCircle(color = accent.copy(alpha = 0.82f), radius = outerR - 3.6f, center = center, style = Stroke(width = 1.5f))
+            val arcTopLeft = Offset(gx - outerR, gy - outerR)
+            val arcSize = Size(outerR * 2f, outerR * 2f)
+            for (i in 0 until 3) {
+                drawArc(
+                    color = accent.copy(alpha = 0.90f),
+                    startAngle = i * 120f + 12f,
+                    sweepAngle = 72f,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 3.2f, cap = StrokeCap.Round)
+                )
+            }
+            for (i in 0 until 6) {
+                val a = i * (PI.toFloat() / 3f)
+                val px = gx + cos(a) * outerR
+                val py = gy + sin(a) * outerR
+                drawCircle(color = Color(0xFF0F172A), radius = 5.4f, center = Offset(px, py))
+                drawCircle(
+                    color = if (i % 2 == 0) accent else Color(0xFFA78BFA),
+                    radius = 3.0f,
+                    center = Offset(px, py)
+                )
+            }
+        }
+
+        rotate(degrees = -t * 58f, pivot = center) {
+            drawCircle(
+                color = (if (portal.isShortcut) EmeraldHull else Color(0xFFA78BFA)).copy(alpha = 0.82f),
+                radius = innerR + 3f,
+                center = center,
+                style = Stroke(
+                    width = 2.2f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f)
+                )
+            )
+            val innerArcTopLeft = Offset(gx - (innerR - 6f), gy - (innerR - 6f))
+            val innerArcSize = Size((innerR - 6f) * 2f, (innerR - 6f) * 2f)
+            for (i in 0 until 2) {
+                drawArc(
+                    color = Color.White.copy(alpha = 0.85f * pulse),
+                    startAngle = i * 180f,
+                    sweepAngle = 82f,
+                    useCenter = false,
+                    topLeft = innerArcTopLeft,
+                    size = innerArcSize,
+                    style = Stroke(width = 2.0f, cap = StrokeCap.Round)
+                )
+            }
+        }
+
+        val label = if (isRouteTarget) "★ ${portal.gateLabel}" else portal.gateLabel
+        popupPaint.textSize = 13.5f
+        popupPaint.color = android.graphics.Color.argb(215, 4, 7, 17)
+        nativeCanvas.drawText(label, gx + 1f, gy + outerR + 22f, popupPaint)
+        popupPaint.color = when {
+            isRouteTarget -> android.graphics.Color.rgb(0, 229, 255)
+            nearGate -> android.graphics.Color.rgb(224, 247, 250)
+            portal.isShortcut -> android.graphics.Color.rgb(52, 211, 153)
+            else -> android.graphics.Color.argb(230, 186, 230, 253)
+        }
+        nativeCanvas.drawText(label, gx, gy + outerR + 21f, popupPaint)
     }
-    nativeCanvas.drawText(label, gx, gy + outerR + 21f, popupPaint)
 }
 
 private fun DrawScope.drawSafeZoneAndStation(time: Float) {
@@ -1299,389 +1309,533 @@ private fun DrawScope.drawInterceptorShip(
     }
 }
 
-private fun DrawScope.drawBattlecruiserShip(
+internal fun DrawScope.drawBattlecruiserShip(
     cx: Float,
     cy: Float,
     thrust: Float,
     pulse: Float,
     time: Float,
-    hitFlash: Float
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true
 ) {
-    val glowPulse = 0.72f + 0.28f * sin(time * 6.4f)
+    val corePulse = 0.78f + 0.22f * sin(time * 6.2f)
 
-    // 1. Existing 3 Rear Thrusters (dynamic plasma flames)
-    drawPlasmaThrusterFlame(cx - 19.0f, cy - 9.2f, thrust, maxLen = 20f, halfW = 3.5f, pulse = pulse, phaseOffset = 0.7f)
-    drawPlasmaThrusterFlame(cx - 21.8f, cy, thrust, maxLen = 27f, halfW = 4.6f, pulse = pulse, phaseOffset = 0.0f)
-    drawPlasmaThrusterFlame(cx - 19.0f, cy + 9.2f, thrust, maxLen = 20f, halfW = 3.5f, pulse = pulse, phaseOffset = 2.3f)
+    // 1. Double / Twin Main Thrusters venting existing dynamic cyan plasma exhaust
+    if (showThrusterFlames) {
+        drawPlasmaThrusterFlame(cx - 20.6f, cy - 4.8f, thrust, maxLen = 24f, halfW = 3.8f, pulse = pulse, phaseOffset = 0.0f)
+        drawPlasmaThrusterFlame(cx - 20.6f, cy + 4.8f, thrust, maxLen = 24f, halfW = 3.8f, pulse = pulse, phaseOffset = 1.9f)
+    }
 
-    // 3 Rear Armored Thruster Bells
-    val nozzles = arrayOf(
-        Triple(cx - 19.0f, cy - 9.2f, 2.8f),
-        Triple(cx - 21.8f, cy, 3.7f),
-        Triple(cx - 19.0f, cy + 9.2f, 2.8f)
-    )
-    for ((nx, ny, halfH) in nozzles) {
-        val bell = Path().apply {
-            moveTo(nx + 5.6f, ny - halfH * 1.18f)
-            lineTo(nx, ny - halfH * 0.86f)
-            lineTo(nx, ny + halfH * 0.86f)
-            lineTo(nx + 5.6f, ny + halfH * 1.18f)
+    // Twin Main Rear Thruster Nozzles (layered dark-steel bells + cyan exhaust collar)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val ny = cy + sign * 4.8f
+        val nozzle = Path().apply {
+            moveTo(cx - 15.2f, ny - 3.3f)
+            lineTo(cx - 21.0f, ny - 2.5f)
+            lineTo(cx - 21.0f, ny + 2.5f)
+            lineTo(cx - 15.2f, ny + 3.3f)
             close()
         }
         drawPath(
-            path = bell,
+            path = nozzle,
             brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF475569), Color(0xFF1E293B), Color(0xFF0F172A)),
-                startY = ny - halfH * 1.2f,
-                endY = ny + halfH * 1.2f
+                colors = listOf(Color(0xFF64748B), Color(0xFF1E293B), Color(0xFF090D16)),
+                startY = ny - 3.3f,
+                endY = ny + 3.3f
             )
         )
-        drawPath(path = bell, color = Color(0xFF94A3B8).copy(alpha = 0.75f), style = Stroke(width = 0.9f))
+        drawPath(path = nozzle, color = Color(0xFFE2E8F0).copy(alpha = 0.80f), style = Stroke(width = 0.85f))
         drawLine(
-            color = Color(0xFF38BDF8).copy(alpha = 0.65f + 0.35f * thrust),
-            start = Offset(nx + 0.6f, ny - halfH * 0.66f),
-            end = Offset(nx + 0.6f, ny + halfH * 0.66f),
+            color = Color(0xFF00E5FF).copy(alpha = 0.72f + 0.28f * thrust),
+            start = Offset(cx - 20.4f, ny - 1.8f),
+            end = Offset(cx - 20.4f, ny + 1.8f),
             strokeWidth = 1.4f,
             cap = StrokeCap.Round
         )
     }
 
-    // 2. Classic Goliath Top-Down Hull Silhouette:
-    // Thick recessed beveled central nose + deep open forward notches + sweeping forward-curved pincer/mandible wings + broad rear armored shoulders
-    val goliathHull = Path().apply {
-        // Beveled central front nose (slightly recessed behind forward pincer wingtips)
-        moveTo(cx + 18.2f, cy - 3.8f)
-        lineTo(cx + 19.6f, cy - 1.9f)
-        lineTo(cx + 19.6f, cy + 1.9f)
-        lineTo(cx + 18.2f, cy + 3.8f)
+    // 2. Angular "Shoulder" & Winglet Armor Plates (extending outward & slightly backward with stepped-panel layers & bright white highlights)
+    val shoulderWingPaths = ArrayList<Path>(2)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        // Base outer swept angular winglet
+        val outerWinglet = Path().apply {
+            moveTo(cx - 1.2f, cy + sign * 9.8f)
+            lineTo(cx - 3.0f, cy + sign * 21.4f)
+            lineTo(cx - 8.2f, cy + sign * 24.8f)
+            lineTo(cx - 12.2f, cy + sign * 21.5f)
+            lineTo(cx - 10.8f, cy + sign * 19.0f)
+            lineTo(cx - 15.4f, cy + sign * 17.6f)
+            lineTo(cx - 13.8f, cy + sign * 14.5f)
+            lineTo(cx - 16.8f, cy + sign * 12.2f)
+            lineTo(cx - 13.2f, cy + sign * 9.2f)
+            close()
+        }
+        shoulderWingPaths.add(outerWinglet)
+        drawPath(
+            path = outerWinglet,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF1E293B), Color(0xFF334155), Color(0xFF0F172A)),
+                start = Offset(cx - 3f, cy + sign * 24.8f),
+                end = Offset(cx - 16f, cy + sign * 9.2f)
+            )
+        )
+        drawPath(
+            path = outerWinglet,
+            color = Color(0xFFF8FAFC).copy(alpha = 0.90f),
+            style = Stroke(width = 1.05f, join = StrokeJoin.Miter)
+        )
 
-        // Lower nose cheek into deep open notch separating nose from lower forward pincer
-        lineTo(cx + 12.2f, cy + 7.8f)
-        lineTo(cx + 7.4f, cy + 10.4f)
+        // Mid stepped armor layer (steel-gray metallic)
+        val midStepPlate = Path().apply {
+            moveTo(cx - 3.4f, cy + sign * 11.4f)
+            lineTo(cx - 4.8f, cy + sign * 20.4f)
+            lineTo(cx - 9.0f, cy + sign * 21.6f)
+            lineTo(cx - 12.2f, cy + sign * 16.4f)
+            lineTo(cx - 11.4f, cy + sign * 11.2f)
+            close()
+        }
+        drawPath(
+            path = midStepPlate,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF64748B), Color(0xFF334155), Color(0xFF111827)),
+                start = Offset(cx - 4f, cy + sign * 21.5f),
+                end = Offset(cx - 12f, cy + sign * 11.2f)
+            )
+        )
+        drawPath(path = midStepPlate, color = Color(0xFF0F172A), style = Stroke(width = 0.9f))
 
-        // Lower inner pincer mandible blade curving sharply forward past the central nose
-        cubicTo(
-            cx + 13.8f, cy + 11.0f,
-            cx + 22.8f, cy + 12.6f,
-            cx + 30.4f, cy + 14.2f
+        // Upper brushed-silver stepped bevel plate with bright white outer trim
+        val upperBevelPlate = Path().apply {
+            moveTo(cx - 5.4f, cy + sign * 13.2f)
+            lineTo(cx - 6.4f, cy + sign * 18.6f)
+            lineTo(cx - 9.6f, cy + sign * 18.4f)
+            lineTo(cx - 10.6f, cy + sign * 13.6f)
+            close()
+        }
+        drawPath(
+            path = upperBevelPlate,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFFCBD5E1), Color(0xFF64748B), Color(0xFF334155)),
+                start = Offset(cx - 5.5f, cy + sign * 18.6f),
+                end = Offset(cx - 10.6f, cy + sign * 13.2f)
+            )
         )
-        // Sharp predatory forward mandible tip sweeping wide & back into outer curved wing
-        cubicTo(
-            cx + 26.2f, cy + 22.4f,
-            cx + 12.5f, cy + 28.6f,
-            cx - 3.6f, cy + 26.8f
-        )
-        // Broad lower rear armored shoulder
-        cubicTo(
-            cx - 12.8f, cy + 25.8f,
-            cx - 18.6f, cy + 20.6f,
-            cx - 19.2f, cy + 13.6f
-        )
-        // Rear engine bulkhead cutouts
-        lineTo(cx - 16.4f, cy + 11.4f)
-        lineTo(cx - 16.4f, cy + 6.4f)
-        lineTo(cx - 20.2f, cy + 4.2f)
-        lineTo(cx - 20.2f, cy - 4.2f)
-        lineTo(cx - 16.4f, cy - 6.4f)
-        lineTo(cx - 16.4f, cy - 11.4f)
-        lineTo(cx - 19.2f, cy - 13.6f)
-
-        // Broad upper rear armored shoulder
-        cubicTo(
-            cx - 18.6f, cy - 20.6f,
-            cx - 12.8f, cy - 25.8f,
-            cx - 3.6f, cy - 26.8f
-        )
-        // Upper sweeping armored wing curving forward into predatory pincer mandible tip
-        cubicTo(
-            cx + 12.5f, cy - 28.6f,
-            cx + 26.2f, cy - 22.4f,
-            cx + 30.4f, cy - 14.2f
-        )
-        // Upper inner pincer blade edge back into deep open notch
-        cubicTo(
-            cx + 22.8f, cy - 12.6f,
-            cx + 13.8f, cy - 11.0f,
-            cx + 7.4f, cy - 10.4f
-        )
-        // Upper nose cheek back to recessed beveled nose
-        lineTo(cx + 12.2f, cy - 7.8f)
-        close()
+        drawPath(path = upperBevelPlate, color = Color(0xFFF8FAFC).copy(alpha = 0.85f), style = Stroke(width = 0.8f))
     }
 
-    // Base brushed-steel / gunmetal hull gradient
+    // 3. Heavy Tapered Rear Engine Block with Pointed Stabilizers & Layered Armor Casing
+    // Twin pointed rear flanking stabilizer fins
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val sideFin = Path().apply {
+            moveTo(cx - 12.0f, cy + sign * 7.6f)
+            lineTo(cx - 22.8f, cy + sign * 9.8f) // pointed outer stabilizer fin
+            lineTo(cx - 19.6f, cy + sign * 6.0f)
+            lineTo(cx - 13.5f, cy + sign * 5.4f)
+            close()
+        }
+        drawPath(
+            path = sideFin,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF475569), Color(0xFF1E293B), Color(0xFF0B1120)),
+                start = Offset(cx - 12f, cy + sign * 9.8f),
+                end = Offset(cx - 22f, cy + sign * 5.4f)
+            )
+        )
+        drawPath(path = sideFin, color = Color(0xFFE2E8F0).copy(alpha = 0.86f), style = Stroke(width = 0.9f, join = StrokeJoin.Miter))
+    }
+
+    // Main tapered rear engine armor casing & pointed central stabilizer spine
+    val engineBlock = Path().apply {
+        moveTo(cx - 8.5f, cy - 9.4f)
+        lineTo(cx - 16.4f, cy - 8.0f)
+        lineTo(cx - 19.8f, cy - 6.8f)
+        lineTo(cx - 19.8f, cy - 2.6f)
+        lineTo(cx - 24.8f, cy) // pointed central rear stabilizer tip
+        lineTo(cx - 19.8f, cy + 2.6f)
+        lineTo(cx - 19.8f, cy + 6.8f)
+        lineTo(cx - 16.4f, cy + 8.0f)
+        lineTo(cx - 8.5f, cy + 9.4f)
+        close()
+    }
     drawPath(
-        path = goliathHull,
+        path = engineBlock,
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF1E293B), Color(0xFF475569), Color(0xFF334155), Color(0xFF0F172A)),
+            start = Offset(cx - 9f, cy - 9.4f),
+            end = Offset(cx - 24f, cy + 9.4f)
+        )
+    )
+    drawPath(path = engineBlock, color = Color(0xFFF1F5F9).copy(alpha = 0.88f), style = Stroke(width = 1.0f, join = StrokeJoin.Round))
+
+    // Layered inner engine armor cowling plate + central stabilizer highlight
+    val enginePlate = Path().apply {
+        moveTo(cx - 10.6f, cy - 6.0f)
+        lineTo(cx - 18.2f, cy - 4.4f)
+        lineTo(cx - 19.4f, cy)
+        lineTo(cx - 18.2f, cy + 4.4f)
+        lineTo(cx - 10.6f, cy + 6.0f)
+        close()
+    }
+    drawPath(
+        path = enginePlate,
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF64748B), Color(0xFF334155), Color(0xFF1E293B)),
+            start = Offset(cx - 11f, cy - 6f),
+            end = Offset(cx - 19f, cy + 6f)
+        )
+    )
+    drawPath(path = enginePlate, color = Color(0xFF0F172A), style = Stroke(width = 0.9f))
+    drawLine(
+        color = Color(0xFFF8FAFC).copy(alpha = 0.92f),
+        start = Offset(cx - 13.2f, cy),
+        end = Offset(cx - 24.0f, cy),
+        strokeWidth = 1.15f,
+        cap = StrokeCap.Round
+    )
+
+    // 4. Small Forward-Facing Weapon / Laser Barrels on Outer Edges of Pincers
+    for (sign in floatArrayOf(-1f, 1f)) {
+        // Outer shoulder barrel
+        val byOuter = cy + sign * 13.8f
+        drawLine(
+            color = Color(0xFF1E293B),
+            start = Offset(cx + 19.2f, byOuter),
+            end = Offset(cx + 27.6f, byOuter),
+            strokeWidth = 2.3f,
+            cap = StrokeCap.Butt
+        )
+        drawLine(
+            color = Color(0xFFF1F5F9).copy(alpha = 0.92f),
+            start = Offset(cx + 20.0f, byOuter - sign * 0.55f),
+            end = Offset(cx + 27.2f, byOuter - sign * 0.55f),
+            strokeWidth = 0.8f,
+            cap = StrokeCap.Round
+        )
+        drawCircle(color = Color(0xFF7DD3FC), radius = 1.15f, center = Offset(cx + 27.9f, byOuter))
+
+        // Forward pincer-tip outer edge barrel
+        val byTip = cy + sign * 8.8f
+        drawLine(
+            color = Color(0xFF334155),
+            start = Offset(cx + 23.6f, byTip),
+            end = Offset(cx + 29.8f, byTip),
+            strokeWidth = 1.9f,
+            cap = StrokeCap.Butt
+        )
+        drawLine(
+            color = Color.White.copy(alpha = 0.92f),
+            start = Offset(cx + 24.2f, byTip - sign * 0.45f),
+            end = Offset(cx + 29.5f, byTip - sign * 0.45f),
+            strokeWidth = 0.7f,
+            cap = StrokeCap.Round
+        )
+        drawCircle(color = Color(0xFFBAE6FD), radius = 1.0f, center = Offset(cx + 30.1f, byTip))
+    }
+
+    // 5. Massive Circular Curved Pincers ("O" / "U" Horseshoe Shape, ~18% larger than Interceptor)
+    val pincerPaths = ArrayList<Path>(2)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val pincer = Path().apply {
+            // Heavy armored root anchored solidly at mid-hull
+            moveTo(cx - 3.6f, cy + sign * 17.6f)
+            // Sweeping circular outer crescent wrapping boldly forward & inward
+            cubicTo(
+                cx + 10.6f, cy + sign * 25.4f,
+                cx + 26.8f, cy + sign * 19.2f,
+                cx + 28.4f, cy + sign * 3.1f // sharp pointed tip with crisp narrow front gap (~6.2 units)
+            )
+            // Razor beveled inner tip
+            lineTo(cx + 25.6f, cy + sign * 4.5f)
+            // Smooth circular inner crescent edge enclosing the central needle-nose & cockpit
+            cubicTo(
+                cx + 22.8f, cy + sign * 13.4f,
+                cx + 11.4f, cy + sign * 15.6f,
+                cx - 1.0f, cy + sign * 9.0f
+            )
+            close()
+        }
+        pincerPaths.add(pincer)
+
+        // Base deep charcoal & dark steel-gray metallic fill
+        drawPath(
+            path = pincer,
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF0B1120),
+                    Color(0xFF1E293B),
+                    Color(0xFF334155),
+                    Color(0xFF1E293B),
+                    Color(0xFF090D16)
+                ),
+                start = Offset(cx + 2f, cy + sign * 24f),
+                end = Offset(cx + 27f, cy + sign * 3.5f)
+            )
+        )
+
+        // Intricate Layered Armor Sub-Panel 1: Sculpted Metallic Silver Outer Crescent Plate
+        val outerArmorPlate = Path().apply {
+            moveTo(cx + 0.6f, cy + sign * 17.8f)
+            cubicTo(
+                cx + 9.8f, cy + sign * 22.0f,
+                cx + 20.6f, cy + sign * 18.6f,
+                cx + 25.0f, cy + sign * 10.6f
+            )
+            lineTo(cx + 22.8f, cy + sign * 9.6f)
+            cubicTo(
+                cx + 18.8f, cy + sign * 16.0f,
+                cx + 9.8f, cy + sign * 18.6f,
+                cx + 1.6f, cy + sign * 14.8f
+            )
+            close()
+        }
+        drawPath(
+            path = outerArmorPlate,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF94A3B8), Color(0xFFCBD5E1), Color(0xFF475569), Color(0xFF1E293B)),
+                start = Offset(cx + 2f, cy + sign * 20f),
+                end = Offset(cx + 24f, cy + sign * 10f)
+            )
+        )
+        drawPath(path = outerArmorPlate, color = Color(0xFF0B1120).copy(alpha = 0.90f), style = Stroke(width = 0.85f))
+
+        // Intricate Layered Armor Sub-Panel 2: Inner Dark Steel-Gray Recessed Curve Plate
+        val innerArmorPlate = Path().apply {
+            moveTo(cx + 2.8f, cy + sign * 13.6f)
+            cubicTo(
+                cx + 10.2f, cy + sign * 16.4f,
+                cx + 17.8f, cy + sign * 14.8f,
+                cx + 21.8f, cy + sign * 9.4f
+            )
+            lineTo(cx + 20.4f, cy + sign * 8.4f)
+            cubicTo(
+                cx + 16.8f, cy + sign * 13.0f,
+                cx + 10.2f, cy + sign * 14.4f,
+                cx + 3.4f, cy + sign * 11.8f
+            )
+            close()
+        }
+        drawPath(
+            path = innerArmorPlate,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF334155), Color(0xFF64748B), Color(0xFF1E293B)),
+                start = Offset(cx + 3f, cy + sign * 14f),
+                end = Offset(cx + 21f, cy + sign * 8.5f)
+            )
+        )
+        drawPath(path = innerArmorPlate, color = Color(0xFF090D16), style = Stroke(width = 0.75f))
+
+        // Intricate Layered Armor Sub-Panel 3: Pointed Forward Tip Metallic Bevel Cap
+        val tipBevel = Path().apply {
+            moveTo(cx + 27.5f, cy + sign * 3.8f)
+            cubicTo(
+                cx + 26.8f, cy + sign * 7.2f,
+                cx + 25.4f, cy + sign * 9.6f,
+                cx + 23.6f, cy + sign * 11.2f
+            )
+            lineTo(cx + 22.4f, cy + sign * 9.6f)
+            cubicTo(
+                cx + 23.8f, cy + sign * 8.2f,
+                cx + 24.8f, cy + sign * 6.4f,
+                cx + 25.4f, cy + sign * 4.8f
+            )
+            close()
+        }
+        drawPath(
+            path = tipBevel,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFFE2E8F0), Color(0xFF64748B)),
+                start = Offset(cx + 27.5f, cy + sign * 3.8f),
+                end = Offset(cx + 22.4f, cy + sign * 11.0f)
+            )
+        )
+
+        // Clean recessed dark armor plate divider seams
+        drawLine(
+            color = Color(0xFF090D16).copy(alpha = 0.90f),
+            start = Offset(cx + 8.6f, cy + sign * 21.0f),
+            end = Offset(cx + 9.0f, cy + sign * 13.6f),
+            strokeWidth = 0.95f
+        )
+        drawLine(
+            color = Color(0xFF090D16).copy(alpha = 0.90f),
+            start = Offset(cx + 18.2f, cy + sign * 18.6f),
+            end = Offset(cx + 16.4f, cy + sign * 12.6f),
+            strokeWidth = 0.95f
+        )
+
+        // High-Contrast Bright White / Cyan Neon Edge Highlights (outer & inner crescent border paths)
+        drawPath(
+            path = pincer,
+            color = Color(0xFF00E5FF).copy(alpha = 0.34f * corePulse),
+            style = Stroke(width = 2.9f, join = StrokeJoin.Round)
+        )
+        drawPath(
+            path = pincer,
+            color = Color(0xFFF0F9FF).copy(alpha = 0.96f),
+            style = Stroke(width = 1.15f, join = StrokeJoin.Round)
+        )
+    }
+
+    // 6. Central Body & Fuselage (Needle-Like Inner Nose Completely Enveloped by Curved Pincers)
+    val centralHull = Path().apply {
+        moveTo(cx + 16.4f, cy) // streamlined needle-like forward core
+        lineTo(cx + 9.8f, cy - 3.6f)
+        lineTo(cx + 4.0f, cy - 7.0f)
+        lineTo(cx - 4.4f, cy - 9.4f)
+        lineTo(cx - 11.8f, cy - 7.4f)
+        lineTo(cx - 14.8f, cy - 4.0f)
+        lineTo(cx - 14.8f, cy + 4.0f)
+        lineTo(cx - 11.8f, cy + 7.4f)
+        lineTo(cx - 4.4f, cy + 9.4f)
+        lineTo(cx + 4.0f, cy + 7.0f)
+        lineTo(cx + 9.8f, cy + 3.6f)
+        close()
+    }
+    drawPath(
+        path = centralHull,
         brush = Brush.linearGradient(
             colors = listOf(
                 Color(0xFF1E293B),
-                Color(0xFF475569),
                 Color(0xFF64748B),
+                Color(0xFF94A3B8),
                 Color(0xFF334155),
                 Color(0xFF0F172A)
             ),
-            start = Offset(cx + 4f, cy - 28f),
-            end = Offset(cx - 6f, cy + 28f)
+            start = Offset(cx + 4f, cy - 9.4f),
+            end = Offset(cx - 10f, cy + 9.4f)
         )
     )
     drawPath(
-        path = goliathHull,
-        color = Color(0xFFCBD5E1).copy(alpha = 0.78f),
-        style = Stroke(width = 1.35f, join = StrokeJoin.Round)
+        path = centralHull,
+        color = Color(0xFF00E5FF).copy(alpha = 0.22f),
+        style = Stroke(width = 2.2f, join = StrokeJoin.Round)
+    )
+    drawPath(
+        path = centralHull,
+        color = Color(0xFFF1F5F9).copy(alpha = 0.92f),
+        style = Stroke(width = 1.05f, join = StrokeJoin.Round)
     )
 
-    // 3. Layered Armored Pincer Wing Plates, Broad Rear Shoulders, Panel Seams & Warm Orange/Amber Tactical Stripes
-    for (sign in floatArrayOf(-1f, 1f)) {
-        // Broad rear armored shoulder plate
-        val rearShoulder = Path().apply {
-            moveTo(cx - 2.0f, cy + sign * 24.4f)
-            cubicTo(
-                cx - 10.4f, cy + sign * 23.6f,
-                cx - 15.8f, cy + sign * 19.2f,
-                cx - 16.6f, cy + sign * 13.0f
-            )
-            lineTo(cx - 11.0f, cy + sign * 9.8f)
-            lineTo(cx - 1.5f, cy + sign * 11.2f)
-            lineTo(cx + 1.8f, cy + sign * 18.8f)
-            close()
-        }
-        drawPath(
-            path = rearShoulder,
-            brush = Brush.linearGradient(
-                colors = listOf(Color(0xFF475569), Color(0xFF334155), Color(0xFF1E293B)),
-                start = Offset(cx - 1f, cy + sign * 24f),
-                end = Offset(cx - 16f, cy + sign * 10f)
-            )
-        )
-        drawPath(path = rearShoulder, color = Color(0xFF0F172A), style = Stroke(width = 1.05f))
-
-        // Forward-curved predatory pincer armor plate
-        val pincerPlate = Path().apply {
-            moveTo(cx + 27.6f, cy + sign * 15.1f)
-            cubicTo(
-                cx + 23.4f, cy + sign * 20.8f,
-                cx + 12.2f, cy + sign * 25.4f,
-                cx + 0.2f, cy + sign * 23.8f
-            )
-            lineTo(cx + 3.4f, cy + sign * 15.8f)
-            cubicTo(
-                cx + 10.2f, cy + sign * 13.8f,
-                cx + 18.8f, cy + sign * 13.8f,
-                cx + 27.6f, cy + sign * 15.1f
-            )
-            close()
-        }
-        drawPath(
-            path = pincerPlate,
-            brush = Brush.linearGradient(
-                colors = listOf(Color(0xFF94A3B8), Color(0xFF475569), Color(0xFF1E293B)),
-                start = Offset(cx + 26f, cy + sign * 15f),
-                end = Offset(cx + 1f, cy + sign * 24f)
-            )
-        )
-        drawPath(path = pincerPlate, color = Color(0xFF0F172A), style = Stroke(width = 1.05f))
-
-        // Subtle warm orange/amber tactical accent stripe sweeping along the curved pincer wing
-        val amberStripe = Path().apply {
-            moveTo(cx + 21.8f, cy + sign * 17.5f)
-            cubicTo(
-                cx + 16.5f, cy + sign * 21.4f,
-                cx + 9.2f, cy + sign * 23.2f,
-                cx + 2.8f, cy + sign * 22.5f
-            )
-            lineTo(cx + 4.1f, cy + sign * 19.6f)
-            cubicTo(
-                cx + 9.6f, cy + sign * 20.1f,
-                cx + 15.6f, cy + sign * 18.7f,
-                cx + 20.2f, cy + sign * 15.8f
-            )
-            close()
-        }
-        drawPath(
-            path = amberStripe,
-            brush = Brush.linearGradient(
-                colors = listOf(Color(0xFFF59E0B), Color(0xFFEA580C), Color(0xFFFBBF24)),
-                start = Offset(cx + 21f, cy + sign * 16f),
-                end = Offset(cx + 3f, cy + sign * 22f)
-            )
-        )
-        drawPath(path = amberStripe, color = Color(0xFF0F172A).copy(alpha = 0.72f), style = Stroke(width = 0.75f))
-
-        // Secondary compact warm amber tactical hash on rear armored shoulder
-        drawLine(
-            color = Color(0xFFF59E0B).copy(alpha = 0.90f),
-            start = Offset(cx - 5.2f, cy + sign * 21.8f),
-            end = Offset(cx - 11.4f, cy + sign * 18.4f),
-            strokeWidth = 2.0f,
-            cap = StrokeCap.Round
-        )
-
-        // Brushed-steel highlight along outer pincer blade leading edge
-        val outerBladeTrim = Path().apply {
-            moveTo(cx + 29.2f, cy + sign * 14.8f)
-            cubicTo(
-                cx + 24.8f, cy + sign * 21.8f,
-                cx + 13.4f, cy + sign * 26.8f,
-                cx + 1.0f, cy + sign * 26.0f
-            )
-        }
-        drawPath(
-            path = outerBladeTrim,
-            color = Color(0xFFE2E8F0).copy(alpha = 0.80f),
-            style = Stroke(width = 1.25f, cap = StrokeCap.Round)
-        )
-
-        // Recessed inner-notch weapon emitter ports (tucked cleanly inside the pincer jaw)
-        drawLine(
-            color = Color(0xFF334155),
-            start = Offset(cx + 11.2f, cy + sign * 12.0f),
-            end = Offset(cx + 20.2f, cy + sign * 13.0f),
-            strokeWidth = 2.1f,
-            cap = StrokeCap.Butt
-        )
-        drawCircle(
-            color = Color(0xFF38BDF8).copy(alpha = 0.55f * glowPulse),
-            radius = 1.8f,
-            center = Offset(cx + 20.6f, cy + sign * 13.0f)
-        )
-
-        // Clean geometric armor panel seam lines across wing & shoulder
-        drawLine(
-            color = Color(0xFF0F172A).copy(alpha = 0.85f),
-            start = Offset(cx + 12.6f, cy + sign * 23.6f),
-            end = Offset(cx + 9.6f, cy + sign * 14.4f),
-            strokeWidth = 1.0f
-        )
-        drawLine(
-            color = Color(0xFF0F172A).copy(alpha = 0.82f),
-            start = Offset(cx - 5.8f, cy + sign * 23.4f),
-            end = Offset(cx - 7.8f, cy + sign * 11.2f),
-            strokeWidth = 1.0f
-        )
-    }
-
-    // 4. Thick Muscular Central Fuselage Spine with Recessed Beveled Armored Nose
-    val centralFuselage = Path().apply {
-        moveTo(cx + 17.8f, cy - 3.4f)
-        lineTo(cx + 19.0f, cy - 1.6f)
-        lineTo(cx + 19.0f, cy + 1.6f)
-        lineTo(cx + 17.8f, cy + 3.4f)
-        lineTo(cx + 10.6f, cy + 8.0f)
-        lineTo(cx - 4.0f, cy + 9.4f)
-        lineTo(cx - 14.8f, cy + 7.4f)
-        lineTo(cx - 18.2f, cy + 3.4f)
-        lineTo(cx - 18.2f, cy - 3.4f)
-        lineTo(cx - 14.8f, cy - 7.4f)
-        lineTo(cx - 4.0f, cy - 9.4f)
-        lineTo(cx + 10.6f, cy - 8.0f)
+    // Sleek Needle-Nose Prow & Fine Metallic Spire centered inside the hollow crescent
+    val needleProw = Path().apply {
+        moveTo(cx + 21.8f, cy)
+        lineTo(cx + 11.2f, cy - 2.0f)
+        lineTo(cx + 9.6f, cy)
+        lineTo(cx + 11.2f, cy + 2.0f)
         close()
     }
     drawPath(
-        path = centralFuselage,
+        path = needleProw,
         brush = Brush.linearGradient(
-            colors = listOf(
-                Color(0xFF94A3B8),
-                Color(0xFFCBD5E1),
-                Color(0xFF64748B),
-                Color(0xFF334155),
-                Color(0xFF1E293B)
-            ),
-            start = Offset(cx + 6f, cy - 9.5f),
-            end = Offset(cx - 6f, cy + 9.5f)
+            colors = listOf(Color(0xFFF8FAFC), Color(0xFF94A3B8), Color(0xFF334155)),
+            start = Offset(cx + 21f, cy - 2f),
+            end = Offset(cx + 10f, cy + 2f)
         )
     )
-    drawPath(path = centralFuselage, color = Color(0xFF0F172A), style = Stroke(width = 1.25f, join = StrokeJoin.Round))
-
-    // Beveled front nose armor plate & subtle amber centerline nose accent
-    val noseBevel = Path().apply {
-        moveTo(cx + 18.2f, cy - 1.5f)
-        lineTo(cx + 13.6f, cy - 4.2f)
-        lineTo(cx + 13.6f, cy + 4.2f)
-        lineTo(cx + 18.2f, cy + 1.5f)
-        close()
-    }
-    drawPath(path = noseBevel, color = Color(0xFF334155))
-    drawPath(path = noseBevel, color = Color(0xFFE2E8F0).copy(alpha = 0.65f), style = Stroke(width = 0.9f))
+    drawPath(path = needleProw, color = Color(0xFF0F172A), style = Stroke(width = 0.75f))
     drawLine(
-        color = Color(0xFFF59E0B).copy(alpha = 0.9f),
-        start = Offset(cx + 17.5f, cy),
-        end = Offset(cx + 14.3f, cy),
-        strokeWidth = 1.7f,
+        color = Color(0xFFE0F2FE),
+        start = Offset(cx + 19.6f, cy),
+        end = Offset(cx + 23.0f, cy),
+        strokeWidth = 1.05f,
         cap = StrokeCap.Round
     )
 
-    // Muscular dorsal armor seam & rear reactor cooling louvers
-    drawLine(
-        color = Color(0xFF0F172A).copy(alpha = 0.8f),
-        start = Offset(cx - 1.8f, cy - 8.6f),
-        end = Offset(cx - 1.8f, cy + 8.6f),
-        strokeWidth = 1.05f
-    )
-    for (lx in floatArrayOf(cx - 6.0f, cx - 9.4f, cx - 12.8f)) {
-        drawLine(
-            color = Color(0xFF0F172A).copy(alpha = 0.88f),
-            start = Offset(lx, cy - 4.6f),
-            end = Offset(lx, cy + 4.6f),
-            strokeWidth = 1.25f,
-            cap = StrokeCap.Round
-        )
-    }
-
-    // 5. Glowing Cockpit Canopy near the Front-Center
-    val cockpit = Path().apply {
-        moveTo(cx + 13.2f, cy)
+    // 7. Streamlined Dark Armored Cockpit centered toward the back of the inner section + Glowing GREEN Jewel Canopy/Core
+    val cockpitHousing = Path().apply {
+        moveTo(cx + 6.8f, cy)
         cubicTo(
-            cx + 10.6f, cy - 3.6f,
-            cx + 5.6f, cy - 4.4f,
-            cx + 0.8f, cy - 3.2f
+            cx + 4.8f, cy - 3.6f,
+            cx - 0.6f, cy - 4.8f,
+            cx - 6.6f, cy - 3.6f
         )
-        lineTo(cx - 0.8f, cy)
-        lineTo(cx + 0.8f, cy + 3.2f)
+        lineTo(cx - 8.4f, cy)
+        lineTo(cx - 6.6f, cy + 3.6f)
         cubicTo(
-            cx + 5.6f, cy + 4.4f,
-            cx + 10.6f, cy + 3.6f,
-            cx + 13.2f, cy
+            cx - 0.6f, cy + 4.8f,
+            cx + 4.8f, cy + 3.6f,
+            cx + 6.8f, cy
         )
         close()
     }
-    // Subtle outer canopy glow halo
     drawPath(
-        path = cockpit,
-        color = Color(0xFF38BDF8).copy(alpha = 0.24f * glowPulse),
-        style = Stroke(width = 3.2f)
-    )
-    drawPath(
-        path = cockpit,
+        path = cockpitHousing,
         brush = Brush.linearGradient(
-            colors = listOf(
-                Color(0xFFF0F9FF),
-                Color(0xFF38BDF8),
-                Color(0xFF0284C7),
-                Color(0xFF0C4A6E)
-            ),
-            start = Offset(cx + 12f, cy - 4.4f),
-            end = Offset(cx - 1f, cy + 4.4f)
+            colors = listOf(Color(0xFF1E293B), Color(0xFF0B1120), Color(0xFF064E3B)),
+            start = Offset(cx + 6f, cy - 4.5f),
+            end = Offset(cx - 8f, cy + 4.5f)
         )
     )
-    drawPath(path = cockpit, color = Color(0xFF0F172A), style = Stroke(width = 1.2f))
-    // Canopy structural frame rib & crisp specular reflection
-    drawLine(
-        color = Color(0xFF0F172A).copy(alpha = 0.85f),
-        start = Offset(cx + 6.4f, cy - 3.6f),
-        end = Offset(cx + 5.8f, cy + 3.6f),
-        strokeWidth = 0.95f
+    drawPath(
+        path = cockpitHousing,
+        color = Color(0xFFCBD5E1).copy(alpha = 0.85f),
+        style = Stroke(width = 0.9f, join = StrokeJoin.Round)
     )
+
+    // Multi-layered Glowing Green Jewel Canopy / Energy Core
+    val greenJewel = Path().apply {
+        moveTo(cx + 2.8f, cy)
+        cubicTo(
+            cx + 1.2f, cy - 2.6f,
+            cx - 2.4f, cy - 3.1f,
+            cx - 5.4f, cy - 2.2f
+        )
+        lineTo(cx - 6.6f, cy)
+        lineTo(cx - 5.4f, cy + 2.2f)
+        cubicTo(
+            cx - 2.4f, cy + 3.1f,
+            cx + 1.2f, cy + 2.6f,
+            cx + 2.8f, cy
+        )
+        close()
+    }
+    // Soft glowing emerald aura around the jewel core
+    drawCircle(
+        color = Color(0xFF22C55E).copy(alpha = 0.28f * corePulse),
+        radius = 6.2f,
+        center = Offset(cx - 2.0f, cy)
+    )
+    drawPath(
+        path = greenJewel,
+        color = Color(0xFF4ADE80).copy(alpha = 0.45f * corePulse),
+        style = Stroke(width = 2.6f)
+    )
+    drawPath(
+        path = greenJewel,
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFFECFDF5),
+                Color(0xFF4ADE80),
+                Color(0xFF16A34A),
+                Color(0xFF065F46)
+            ),
+            center = Offset(cx - 1.8f, cy - 0.5f),
+            radius = 5.0f
+        )
+    )
+    drawPath(path = greenJewel, color = Color(0xFFBBF7D0).copy(alpha = 0.92f), style = Stroke(width = 0.85f))
+    // Jewel crystal facet highlight & specular glint
     drawLine(
-        color = Color.White.copy(alpha = 0.94f),
-        start = Offset(cx + 10.4f, cy - 1.1f),
-        end = Offset(cx + 3.0f, cy - 2.1f),
-        strokeWidth = 1.35f,
+        color = Color.White.copy(alpha = 0.95f),
+        start = Offset(cx + 0.8f, cy - 0.9f),
+        end = Offset(cx - 3.4f, cy - 1.4f),
+        strokeWidth = 1.1f,
         cap = StrokeCap.Round
     )
+    drawCircle(color = Color(0xFFDCFCE7), radius = 1.0f, center = Offset(cx - 1.8f, cy))
 
     if (hitFlash > 0.08f) {
-        drawPath(goliathHull, Color(0xFFFF6D00).copy(alpha = 0.35f * hitFlash))
-        drawPath(goliathHull, Color(0xFFFFB74D).copy(alpha = 0.8f * hitFlash), style = Stroke(width = 2.0f))
+        val flashFill = Color(0xFFFF6D00).copy(alpha = 0.35f * hitFlash)
+        val flashStroke = Color(0xFFFFB74D).copy(alpha = 0.80f * hitFlash)
+        for (p in pincerPaths) {
+            drawPath(p, flashFill)
+            drawPath(p, flashStroke, style = Stroke(width = 1.8f))
+        }
+        drawPath(centralHull, flashFill)
+        drawPath(centralHull, flashStroke, style = Stroke(width = 1.8f))
+        for (w in shoulderWingPaths) {
+            drawPath(w, flashFill)
+        }
     }
 }
 

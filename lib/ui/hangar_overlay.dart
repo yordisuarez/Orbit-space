@@ -1138,25 +1138,58 @@ class _HangarOverlayState extends State<HangarOverlay> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(
-                        spec.displayName,
-                        maxLines: 1,
-                        softWrap: false,
-                        style: const TextStyle(
-                          color: Color(0xFFF1F5F9),
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        spec.roleLabel,
-                        maxLines: 1,
-                        softWrap: false,
-                        style: TextStyle(
-                          color: spec.accentColor,
-                          fontSize: 9.8,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      Row(
+                        children: <Widget>[
+                          Container(
+                            width: 38.0,
+                            height: 38.0,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF040914),
+                              borderRadius: BorderRadius.circular(8.0),
+                              border: Border.all(
+                                color: spec.accentColor.withOpacity(0.65),
+                                width: 1.0,
+                              ),
+                            ),
+                            child: CustomPaint(
+                              painter: _ShipClassMiniPainter(
+                                shipClass: ship,
+                                fill: spec.primaryColor,
+                                accent: spec.accentColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8.0),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  spec.displayName,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Color(0xFFF1F5F9),
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  spec.roleLabel,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: spec.accentColor,
+                                    fontSize: 9.8,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 5.0),
                       Text(
@@ -2314,6 +2347,75 @@ class _FormationMiniPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _FormationMiniPainter oldDelegate) {
     return oldDelegate.formation != formation || oldDelegate.accent != accent;
+  }
+}
+
+class _ShipClassMiniPainter extends CustomPainter {
+  const _ShipClassMiniPainter({
+    required this.shipClass,
+    required this.fill,
+    required this.accent,
+  });
+
+  final ShipClass shipClass;
+  final Color fill;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double cx = size.width * 0.5;
+    final double cy = size.height * 0.5;
+    if (shipClass == ShipClass.battlecruiser) {
+      final double scale = size.shortestSide / 60.0;
+      canvas.save();
+      canvas.translate(cx - 1.5 * scale, cy);
+      canvas.scale(scale, scale);
+      PlayerShipComponent.drawBattlecruiserGoliathBody(
+        canvas,
+        cx: 0.0,
+        cy: 0.0,
+        thrust: 0.35,
+        time: 0.0,
+        flash: 0.0,
+      );
+      canvas.restore();
+      return;
+    }
+
+    final Path path = Path();
+    if (shipClass == ShipClass.interceptor) {
+      path
+        ..moveTo(cx + 11.0, cy)
+        ..lineTo(cx - 8.0, cy - 9.0)
+        ..lineTo(cx - 5.0, cy)
+        ..lineTo(cx - 8.0, cy + 9.0)
+        ..close();
+    } else {
+      path
+        ..moveTo(cx + 12.0, cy - 4.0)
+        ..lineTo(cx + 5.0, cy - 11.0)
+        ..lineTo(cx - 9.0, cy - 11.0)
+        ..lineTo(cx - 11.0, cy)
+        ..lineTo(cx - 9.0, cy + 11.0)
+        ..lineTo(cx + 5.0, cy + 11.0)
+        ..lineTo(cx + 12.0, cy + 4.0)
+        ..close();
+    }
+    canvas.drawPath(path, Paint()..color = fill);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.8,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShipClassMiniPainter oldDelegate) {
+    return oldDelegate.shipClass != shipClass ||
+        oldDelegate.fill != fill ||
+        oldDelegate.accent != accent;
   }
 }
 

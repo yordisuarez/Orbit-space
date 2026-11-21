@@ -57,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -1743,44 +1744,54 @@ private fun ShipClassMiniPreview(shipClass: ShipClass) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(36.dp)
+            .size(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0xFF040914))
             .border(1.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
     ) {
-        Canvas(modifier = Modifier.size(28.dp)) {
+        Canvas(modifier = Modifier.size(34.dp)) {
             val cx = size.width * 0.5f
             val cy = size.height * 0.5f
-            val path = when (shipClass) {
-                ShipClass.INTERCEPTOR -> Path().apply {
-                    moveTo(cx + 11f, cy)
-                    lineTo(cx - 8f, cy - 9f)
-                    lineTo(cx - 5f, cy)
-                    lineTo(cx - 8f, cy + 9f)
-                    close()
+            if (shipClass == ShipClass.BATTLECRUISER) {
+                val previewScale = size.minDimension / 60f
+                withTransform({
+                    translate(left = cx - 1.5f * previewScale, top = cy)
+                    scale(scaleX = previewScale, scaleY = previewScale, pivot = androidx.compose.ui.geometry.Offset.Zero)
+                }) {
+                    drawBattlecruiserShip(
+                        cx = 0f,
+                        cy = 0f,
+                        thrust = 0.35f,
+                        pulse = 0.8f,
+                        time = 0f,
+                        hitFlash = 0f,
+                        showThrusterFlames = false
+                    )
                 }
-                ShipClass.BATTLECRUISER -> Path().apply {
-                    moveTo(cx + 11f, cy - 3f)
-                    lineTo(cx + 2f, cy - 10f)
-                    lineTo(cx - 9f, cy - 8f)
-                    lineTo(cx - 9f, cy + 8f)
-                    lineTo(cx + 2f, cy + 10f)
-                    lineTo(cx + 11f, cy + 3f)
-                    close()
+            } else {
+                val path = when (shipClass) {
+                    ShipClass.INTERCEPTOR -> Path().apply {
+                        moveTo(cx + 11f, cy)
+                        lineTo(cx - 8f, cy - 9f)
+                        lineTo(cx - 5f, cy)
+                        lineTo(cx - 8f, cy + 9f)
+                        close()
+                    }
+                    ShipClass.DREADNOUGHT -> Path().apply {
+                        moveTo(cx + 12f, cy - 4f)
+                        lineTo(cx + 5f, cy - 11f)
+                        lineTo(cx - 9f, cy - 11f)
+                        lineTo(cx - 11f, cy)
+                        lineTo(cx - 9f, cy + 11f)
+                        lineTo(cx + 5f, cy + 11f)
+                        lineTo(cx + 12f, cy + 4f)
+                        close()
+                    }
+                    ShipClass.BATTLECRUISER -> Path()
                 }
-                ShipClass.DREADNOUGHT -> Path().apply {
-                    moveTo(cx + 12f, cy - 4f)
-                    lineTo(cx + 5f, cy - 11f)
-                    lineTo(cx - 9f, cy - 11f)
-                    lineTo(cx - 11f, cy)
-                    lineTo(cx - 9f, cy + 11f)
-                    lineTo(cx + 5f, cy + 11f)
-                    lineTo(cx + 12f, cy + 4f)
-                    close()
-                }
+                drawPath(path = path, color = fill)
+                drawPath(path = path, color = accent, style = Stroke(width = 1.8f))
             }
-            drawPath(path = path, color = fill)
-            drawPath(path = path, color = accent, style = Stroke(width = 1.8f))
         }
     }
 }

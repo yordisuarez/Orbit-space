@@ -63,6 +63,7 @@ class GamePersistence(context: Context) {
             put("activeFormation", state.activeFormation.name)
             put("pilotName", state.pilotName ?: JSONObject.NULL)
             put("companyId", state.companyId ?: JSONObject.NULL)
+            put("currentSectorId", state.currentSectorId)
         }
         prefs.edit()
             .putString(KEY_SAVE_JSON, root.toString())
@@ -186,7 +187,10 @@ class GamePersistence(context: Context) {
                 currentMissionIndex = root.optInt("currentMissionIndex", 0).coerceIn(0, MissionCatalog.all.size),
                 currentMissionProgress = root.optInt("currentMissionProgress", 0).coerceAtLeast(0),
                 pilotName = savedPilotName?.trim()?.takeIf { it.length in 3..14 },
-                companyId = PilotCompany.fromId(savedCompanyId)?.id
+                companyId = PilotCompany.fromId(savedCompanyId)?.id,
+                currentSectorId = root.optString("currentSectorId", "").takeIf {
+                    it in GalaxyMapGraph.sectors
+                } ?: GalaxyMapGraph.homeCityForCompany(PilotCompany.fromId(savedCompanyId))
             )
         } catch (_: Exception) {
             null
