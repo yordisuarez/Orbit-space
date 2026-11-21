@@ -1,10 +1,16 @@
 package com.example.game
 
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,21 +56,31 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
 import com.example.ui.theme.AmberCredits
 import com.example.ui.theme.CrimsonDanger
 import com.example.ui.theme.CyanLaser
+import com.example.ui.theme.EmeraldHull
 import com.example.ui.theme.SpaceDeepSurface
+import com.example.ui.theme.SpaceHudBorder
 import com.example.ui.theme.SpaceVoid
 import com.example.ui.theme.TacticalMuted
 import com.example.ui.theme.TacticalWhite
+import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.hypot
 
 @Composable
 fun SpaceCombatScreen(
@@ -74,7 +91,12 @@ fun SpaceCombatScreen(
     val selectedCompany by viewModel.selectedOnboardingCompany.collectAsStateWithLifecycle()
     val pilotNameDraft by viewModel.pilotNameDraft.collectAsStateWithLifecycle()
     val language by viewModel.language.collectAsStateWithLifecycle()
+    val isMenuOpen by viewModel.isMenuOpen.collectAsStateWithLifecycle()
+    val isInventoryOpen by viewModel.isInventoryOpen.collectAsStateWithLifecycle()
+    val isGuideOpen by viewModel.isGuideOpen.collectAsStateWithLifecycle()
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsStateWithLifecycle()
+    val isSkillsOpen by viewModel.isSkillsOpen.collectAsStateWithLifecycle()
+    val lastCraftOutcome by viewModel.lastCraftOutcome.collectAsStateWithLifecycle()
     val engine = viewModel.engine
 
     CompositionLocalProvider(LocalGameLanguage provides language) {
@@ -117,7 +139,45 @@ fun SpaceCombatScreen(
 
     var frameTick by remember { mutableLongStateOf(0L) }
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    var cameraZoom by remember { mutableFloatStateOf(1.0f) }
+    var isPinchZooming by remember { mutableStateOf(false) }
+    var showAdminActiveToast by remember { mutableStateOf(false) }
+    var lastAdminModeState by remember { mutableStateOf(hud.isAdminMode) }
     val popupPaint = remember { createPopupTextPaint() }
+
+    LaunchedEffect(hud.isAdminMode) {
+        if (hud.isAdminMode && !lastAdminModeState) {
+            lastAdminModeState = true
+            showAdminActiveToast = true
+            delay(2600L)
+            showAdminActiveToast = false
+        } else {
+            lastAdminModeState = hud.isAdminMode
+            if (!hud.isAdminMode) {
+                showAdminActiveToast = false
+            }
+        }
+    }
+    val context = LocalContext.current
+    val versionLabel = remember(context) {
+        val rawVersion = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(0L)
+                ).versionName
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }
+        }.getOrNull()?.trim().orEmpty()
+
+        when {
+            rawVersion.isEmpty() -> "v0.1.0"
+            rawVersion.startsWith("v", ignoreCase = true) -> rawVersion
+            else -> "v$rawVersion"
+        }
+    }
 
     LaunchedEffect(screenStage) {
         var lastNanos = 0L
@@ -135,7 +195,11 @@ fun SpaceCombatScreen(
 
     BackHandler(enabled = hud.isAlive) {
         when {
+            isMenuOpen -> viewModel.closeMenu()
             isSettingsOpen -> viewModel.closeSettings()
+            isGuideOpen -> viewModel.closeGuide()
+            isInventoryOpen -> viewModel.closeInventory()
+            isSkillsOpen -> viewModel.closeSkills()
             hud.activeStationOverlay != null -> viewModel.closeStation()
             hud.isGalaxyMapOpen -> viewModel.closeGalaxyMap()
             hud.isTacticalMapOpen -> viewModel.closeTacticalMap()
@@ -143,6 +207,18 @@ fun SpaceCombatScreen(
             else -> viewModel.togglePause()
         }
     }
+
+    val isAnyOverlayOpen = hud.isTacticalMapOpen ||
+        hud.isGalaxyMapOpen ||
+        hud.activeStationOverlay != null ||
+        hud.isHangarOpen ||
+        hud.isPaused ||
+        isMenuOpen ||
+        isInventoryOpen ||
+        isGuideOpen ||
+        isSettingsOpen ||
+        isSkillsOpen ||
+        !hud.isAlive
 
     Box(
         modifier = Modifier
@@ -154,22 +230,76 @@ fun SpaceCombatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("space_combat_canvas")
-                .pointerInput(Unit) {
-                    detectTapGestures { tapOffset ->
-                        val w = viewportSize.width.toFloat()
-                        val h = viewportSize.height.toFloat()
-                        if (w > 0f && h > 0f) {
-                            val scale = computeWorldScale(h)
-                            val worldX = engine.cameraX + (tapOffset.x - w * 0.5f) / scale
-                            val worldY = engine.cameraY + (tapOffset.y - h * 0.5f) / scale
-                            viewModel.onTapWorld(worldX, worldY)
+                .pointerInput(isAnyOverlayOpen) {
+                    if (!isAnyOverlayOpen) {
+                        awaitEachGesture {
+                            try {
+                                val down = awaitFirstDown(requireUnconsumed = true)
+                                var totalDrag = 0f
+                                var lastPos = down.position
+                                var dragged = false
+                                var hadMultiTouch = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pressedCount = event.changes.count { it.pressed }
+
+                                    if (pressedCount >= 2) {
+                                        hadMultiTouch = true
+                                        if (!isPinchZooming) {
+                                            isPinchZooming = true
+                                        }
+                                        val zoomDelta = event.calculateZoom()
+                                        if (zoomDelta.isFinite() && zoomDelta != 1f) {
+                                            cameraZoom = (cameraZoom * zoomDelta).coerceIn(0.6f, 2.5f)
+                                        }
+                                        event.changes.forEach { change ->
+                                            if (change.pressed) change.consume()
+                                        }
+                                        continue
+                                    }
+
+                                    if (pressedCount == 0) {
+                                        if (!hadMultiTouch && !dragged) {
+                                            val w = viewportSize.width.toFloat()
+                                            val h = viewportSize.height.toFloat()
+                                            if (w > 0f && h > 0f) {
+                                                val scale = computeWorldScale(h) * cameraZoom
+                                                val worldX = engine.cameraX + (lastPos.x - w * 0.5f) / scale
+                                                val worldY = engine.cameraY + (lastPos.y - h * 0.5f) / scale
+                                                viewModel.onTapWorld(worldX, worldY)
+                                            }
+                                        }
+                                        break
+                                    }
+
+                                    if (hadMultiTouch) {
+                                        event.changes.forEach { it.consume() }
+                                        continue
+                                    }
+
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                                    val delta = change.position - lastPos
+                                    lastPos = change.position
+                                    totalDrag += hypot(delta.x, delta.y)
+                                    if (totalDrag > viewConfiguration.touchSlop) {
+                                        dragged = true
+                                        viewModel.clearAutoMoveTarget()
+                                    }
+                                }
+                            } finally {
+                                isPinchZooming = false
+                            }
                         }
                     }
                 }
         ) {
             @Suppress("UNUSED_EXPRESSION")
             frameTick
-            renderSpaceWorld(engine = engine, popupPaint = popupPaint)
+            renderSpaceWorld(
+                engine = engine,
+                popupPaint = popupPaint,
+                cameraZoom = cameraZoom
+            )
         }
 
         Box(
@@ -180,28 +310,31 @@ fun SpaceCombatScreen(
         ) {
             TopTacticalHud(
                 hud = hud,
-                onOpenHangar = { viewModel.openHangar() },
+                onOpenMenu = { viewModel.openMenu() },
                 onOpenGalaxyMap = { viewModel.toggleGalaxyMap() },
-                onOpenSettings = { viewModel.openSettings() },
                 onToggleConfig = { viewModel.toggleConfig() },
-                onCancelAutopilot = { viewModel.cancelAutopilot() },
                 onClaimMission = { viewModel.claimMissionReward() },
                 onTogglePause = { viewModel.togglePause() },
-                modifier = Modifier.align(Alignment.TopStart)
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .zIndex(2f)
             )
 
             TacticalMinimap(
                 engine = engine,
                 frameTick = frameTick,
                 onExpandMap = { viewModel.toggleTacticalMap() },
-                modifier = Modifier.align(Alignment.TopEnd)
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .zIndex(5f)
             )
 
             VirtualJoystick(
                 label = strings.ctrlMove,
                 accentColor = CyanLaser,
                 tag = "left_movement_joystick",
-                onMove = { x, y -> viewModel.setMoveJoystick(x, y) },
+                onTouchStart = { if (!isPinchZooming) viewModel.clearAutoMoveTarget() },
+                onMove = { x, y -> if (!isPinchZooming) viewModel.setMoveJoystick(x, y) },
                 modifier = Modifier.align(Alignment.BottomStart)
             )
 
@@ -250,7 +383,7 @@ fun SpaceCombatScreen(
                     RocketFireButton(
                         cooldownRemaining = hud.rocketCooldownRemaining,
                         inSafeZone = hud.inSafeZone,
-                        onFireRocket = { viewModel.fireHomingRocket() },
+                        onFireRocket = { if (!isPinchZooming) viewModel.fireHomingRocket() },
                         modifier = Modifier.padding(bottom = 14.dp)
                     )
 
@@ -259,7 +392,7 @@ fun SpaceCombatScreen(
                         inSafeZone = hud.inSafeZone,
                         hasTarget = hud.lockedTargetCallsign != null,
                         targetInRange = hud.lockedTargetInRange,
-                        onToggle = { viewModel.toggleAutoFire() },
+                        onToggle = { if (!isPinchZooming) viewModel.toggleAutoFire() },
                         modifier = Modifier.padding(bottom = 14.dp)
                     )
 
@@ -267,19 +400,66 @@ fun SpaceCombatScreen(
                         label = strings.ctrlTarget,
                         accentColor = CrimsonDanger,
                         tag = "right_targeting_joystick",
-                        onMove = { x, y -> viewModel.setAimJoystick(x, y) }
+                        onTouchStart = { if (!isPinchZooming) viewModel.clearAutoMoveTarget() },
+                        onMove = { x, y -> if (!isPinchZooming) viewModel.setAimJoystick(x, y) }
                     )
                 }
             }
+
+            // Compact Camera Zoom 1x Reset Pill (only visible when zoomed in or out)
+            if (abs(cameraZoom - 1.0f) > 0.03f) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 20.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xCC060D1C))
+                        .border(1.dp, CyanLaser.copy(alpha = 0.72f), RoundedCornerShape(14.dp))
+                        .clickable { cameraZoom = 1.0f }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .zIndex(4f)
+                        .testTag("camera_zoom_reset_badge")
+                ) {
+                    Text(
+                        text = "${"%.1f".format(cameraZoom)}x",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 10.5.sp,
+                        color = TacticalMuted,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "1x",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp,
+                        color = CyanLaser,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+
+            Text(
+                text = versionLabel,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                letterSpacing = 0.6.sp,
+                color = TacticalWhite.copy(alpha = 0.35f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 2.dp)
+                    .testTag("hud_version_label")
+            )
         }
 
         if (hud.isTacticalMapOpen && hud.isAlive && !hud.isHangarOpen && !hud.isPaused) {
             ExpandableTacticalMapOverlay(
                 engine = engine,
                 frameTick = frameTick,
-                onSetAutopilot = { wx, wy -> viewModel.setAutopilotTarget(wx, wy) },
+                onTapMapToMove = { wx, wy -> viewModel.setAutoMoveTarget(wx, wy) },
                 onOpenGalaxyMap = { viewModel.openGalaxyMap() },
-                onClose = { viewModel.closeTacticalMap() }
+                onClose = { viewModel.closeTacticalMap() },
+                modifier = Modifier.zIndex(20f)
             )
         }
 
@@ -288,21 +468,28 @@ fun SpaceCombatScreen(
                 currentSectorId = hud.currentSectorId,
                 plottedRoute = hud.plottedRoute,
                 onPlotRoute = { viewModel.setPlottedRoute(it) },
+                onPlotAndEngageAutopilot = { viewModel.plotRouteAndEngageAutopilot(it) },
                 onClearRoute = { viewModel.clearPlottedRoute() },
                 onEngageAutopilotToNextGate = { viewModel.engageAutopilotToNextRoutePortal() },
                 onSwitchToLocalMap = { viewModel.openTacticalMap() },
-                onClose = { viewModel.closeGalaxyMap() }
+                onClose = { viewModel.closeGalaxyMap() },
+                modifier = Modifier.zIndex(20f)
             )
         }
 
         if (hud.activeStationOverlay != null && hud.isAlive && !hud.isHangarOpen && !hud.isPaused) {
             StationOverlay(
                 hud = hud,
-                onRefineResource = { type, refineAll -> viewModel.refineResource(type, refineAll) },
+                lastCraftOutcome = lastCraftOutcome,
+                onSwitchStationTab = { viewModel.switchStationTab(it) },
+                onRefineResource = { type, units -> viewModel.refineResource(type, units) },
                 onBuyMarketResource = { type, isRefined -> viewModel.buyMarketResource(type, isRefined) },
                 onSellMarketResource = { type, isRefined, sellAll -> viewModel.sellMarketResource(type, isRefined, sellAll) },
                 onBuyMarketEquipment = { itemId -> viewModel.buyMarketEquipment(itemId) },
-                onCraftRecipe = { recipe -> viewModel.craftRecipe(recipe) },
+                onBuyBasicVendorItem = { itemId -> viewModel.buyBasicVendorItem(itemId) },
+                onCraftStationRecipe = { recipeId -> viewModel.craftStationRecipe(recipeId) },
+                onDismissCraftOutcome = { viewModel.clearCraftOutcome() },
+                onOpenSkills = { viewModel.openSkills() },
                 onClose = { viewModel.closeStation() }
             )
         }
@@ -311,10 +498,13 @@ fun SpaceCombatScreen(
             HangarShopOverlay(
                 hud = hud,
                 onSwitchConfig = { viewModel.switchConfig(it) },
+                onSelectCapsule = { viewModel.selectCapsule() },
+                onSelectCraftedShip = { viewModel.selectCraftedShip(it) },
                 onBuyOrSelectShipClass = { viewModel.buyOrSelectShipClass(it) },
                 onBuyOrSelectFormation = { viewModel.buyOrSelectFormation(it) },
                 onBuyEquipment = { viewModel.buyEquipment(it) },
                 onBuyFlaxVant = { viewModel.buyFlaxVant() },
+                onRepairVant = { viewModel.repairVant(it) },
                 onFuseItems = { viewModel.fuseItems(it) },
                 onFuseFlaxVants = { viewModel.fuseFlaxVants() },
                 onEquipFromInventory = { viewModel.equipFromInventory(it) },
@@ -331,7 +521,7 @@ fun SpaceCombatScreen(
                 onClaimMissionReward = { viewModel.claimMissionReward() },
                 onResetSave = { viewModel.resetSave() },
                 onDebugAddCredits = { viewModel.debugAddOneMillionCredits() },
-                onDebugAddLevel = { viewModel.debugAddOneLevel() },
+                onToggleAdminMode = { viewModel.toggleAdminMode() },
                 onClose = { viewModel.closeHangar() }
             )
         }
@@ -339,7 +529,7 @@ fun SpaceCombatScreen(
         if (hud.isPaused && !hud.isHangarOpen && hud.isAlive && !isSettingsOpen) {
             TacticalModalOverlay(
                 title = strings.pausedTitle,
-                subtitle = "${hud.activeShipClass.displayName} • ${strings.hudCredits}: ${"%,d".format(hud.credits)} • ${strings.hudKills}: ${hud.kills}",
+                subtitle = "${hud.activeShipDisplayName} • ${strings.hudCredits}: ${"%,d".format(hud.credits)} • ${strings.hudKills}: ${hud.kills}",
                 accentColor = CyanLaser,
                 primaryLabel = strings.actionResume,
                 primaryTag = "resume_button",
@@ -347,6 +537,32 @@ fun SpaceCombatScreen(
                 secondaryLabel = strings.actionResetSave,
                 secondaryTag = "reset_save_button",
                 onSecondaryClick = { viewModel.resetSave() }
+            )
+        }
+
+        if (isSkillsOpen && hud.isAlive) {
+            PilotSkillsOverlay(
+                pilotName = hud.pilotName,
+                pilotCompany = hud.pilotCompany,
+                skills = hud.pilotSkills,
+                isAdminMode = hud.isAdminMode,
+                onAdminCycleSkill = { viewModel.adminCycleSkillLevel(it) },
+                onAdminSetSkill = { skill, level -> viewModel.adminSetSkillLevel(skill, level) },
+                onAdminSetAllSkills = { level -> viewModel.adminSetAllSkillsLevel(level) },
+                onClose = { viewModel.closeSkills() }
+            )
+        }
+
+        if (isInventoryOpen && hud.isAlive) {
+            InventoryOverlay(
+                hud = hud,
+                onClose = { viewModel.closeInventory() }
+            )
+        }
+
+        if (isGuideOpen && hud.isAlive) {
+            GameGuideOverlay(
+                onClose = { viewModel.closeGuide() }
             )
         }
 
@@ -358,15 +574,64 @@ fun SpaceCombatScreen(
             )
         }
 
-        if (!hud.isAlive) {
-            TacticalModalOverlay(
-                title = strings.shipDestroyedTitle,
-                subtitle = "${strings.shipDestroyedSubtitle}  •  ${"%,d".format(hud.credits)} CR",
-                accentColor = CrimsonDanger,
-                primaryLabel = strings.actionRelaunch,
-                primaryTag = "relaunch_button",
-                onPrimaryClick = { viewModel.relaunchShip() }
+        if (isMenuOpen && hud.isAlive) {
+            UnifiedMenuOverlay(
+                hud = hud,
+                currentLanguage = language,
+                onOpenSkills = { viewModel.openSkillsFromMenu() },
+                onOpenHangar = { viewModel.openHangarFromMenu() },
+                onOpenInventory = { viewModel.openInventoryFromMenu() },
+                onOpenGuide = { viewModel.openGuideFromMenu() },
+                onOpenSettings = { viewModel.openSettingsFromMenu() },
+                onClose = { viewModel.closeMenu() }
             )
+        }
+
+        if (!hud.isAlive) {
+            DeathRespawnModalOverlay(
+                hud = hud,
+                strings = strings,
+                onRespawn = { viewModel.relaunchShip() }
+            )
+        }
+
+        if (showAdminActiveToast) {
+            val toastText = if (language == GameLanguage.ES) {
+                "Modo Admin Activo (Pruebas Gratis)"
+            } else {
+                "Admin Mode Active (Free Testing)"
+            }
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(top = 12.dp)
+                    .zIndex(40f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xEB071B18))
+                    .border(1.3.dp, AmberCredits, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .testTag("admin_mode_active_banner")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = EmeraldHull,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = toastText,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color(0xFFFEF08A),
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
         }
     }
     }
@@ -579,6 +844,130 @@ private fun TacticalModalOverlay(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeathRespawnModalOverlay(
+    hud: HudSnapshot,
+    strings: GameText,
+    onRespawn: () -> Unit
+) {
+    val summary = hud.lastDeathSummary
+    val homeCityId = summary?.homeCityId ?: GalaxyMapGraph.homeCityForCompany(hud.pilotCompany)
+    val droppedTotal = (summary?.cargoDroppedToWreck ?: 0) + (summary?.gearDroppedToWreck ?: 0)
+    val destroyedTotal = (summary?.cargoDestroyed ?: 0) + (summary?.gearDestroyed ?: 0)
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC040711))
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(16.dp)
+            .testTag("death_respawn_modal")
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .widthIn(min = 300.dp, max = 460.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(SpaceDeepSurface)
+                .border(1.5.dp, CrimsonDanger.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 22.dp, vertical = 18.dp)
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.img_capsule_ship),
+                contentDescription = strings.capsuleName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.5.dp, CyanLaser.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .testTag("death_modal_capsule_art")
+            )
+
+            Text(
+                text = strings.shipDestroyedTitle,
+                style = MaterialTheme.typography.titleLarge,
+                color = CrimsonDanger,
+                fontWeight = FontWeight.ExtraBold
+            )
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xCC071020))
+                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                if (summary != null && !summary.wasInCapsule && summary.destroyedShipName != null) {
+                    Text(
+                        text = "• ${strings.deathShipLostPrefix} ${summary.destroyedShipName}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = CrimsonDanger,
+                        fontWeight = FontWeight.Bold
+                    )
+                } else {
+                    Text(
+                        text = "• ${strings.deathCapsuleSafeNotice}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = CyanLaser,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                if (summary != null && (droppedTotal > 0 || destroyedTotal > 0)) {
+                    Text(
+                        text = "• ${strings.deathWreckSpawnedPrefix} ${summary.deathSectorId} (${summary.deathX}, ${summary.deathY}) • $droppedTotal / $destroyedTotal ${strings.deathDestroyedRatioSuffix}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberCredits
+                    )
+                }
+
+                if (summary != null && summary.vantsDamagedCount > 0) {
+                    Text(
+                        text = "• ${strings.deathVantsDamagedPrefix} ${summary.vantsDamagedCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFDBA74)
+                    )
+                }
+
+                Text(
+                    text = "• ${strings.deathRespawnCityPrefix} $homeCityId (${strings.capsuleName})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TacticalWhite
+                )
+            }
+
+            Button(
+                onClick = onRespawn,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CyanLaser,
+                    contentColor = SpaceVoid
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("relaunch_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = strings.deathCapsuleRespawnBtn,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
+                )
             }
         }
     }

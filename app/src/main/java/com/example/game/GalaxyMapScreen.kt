@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -99,6 +100,7 @@ fun GalaxyMapOverlay(
     currentSectorId: String,
     plottedRoute: List<String>,
     onPlotRoute: (List<String>) -> Unit,
+    onPlotAndEngageAutopilot: (List<String>) -> Unit,
     onClearRoute: () -> Unit,
     onEngageAutopilotToNextGate: () -> Unit,
     onSwitchToLocalMap: () -> Unit,
@@ -156,6 +158,11 @@ fun GalaxyMapOverlay(
         modifier = modifier
             .fillMaxSize()
             .background(Color(0xF5040814))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
             .testTag("galaxy_map_overlay")
     ) {
         // 1. Deep space starfield + nebula + HUD radar scopes backdrop
@@ -256,6 +263,11 @@ fun GalaxyMapOverlay(
                         .clip(RoundedCornerShape(10.dp))
                         .background(Color(0xD9071022))
                         .border(1.2.dp, CyanLaser.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {}
+                        )
                         .padding(horizontal = 12.dp, vertical = 7.dp)
                 ) {
                     Icon(
@@ -338,6 +350,11 @@ fun GalaxyMapOverlay(
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color(0xCC060C1B))
                     .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
                     .padding(horizontal = 10.dp, vertical = 7.dp)
             ) {
                 LegendEntry(Color(0xFF38BDF8), strings.galaxyLegendCities)
@@ -358,6 +375,11 @@ fun GalaxyMapOverlay(
                         .clip(RoundedCornerShape(10.dp))
                         .background(Color(0xDC081B2C))
                         .border(1.2.dp, CyanLaser.copy(alpha = 0.8f), RoundedCornerShape(10.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {}
+                        )
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                         .testTag("galaxy_route_banner")
                 ) {
@@ -433,10 +455,14 @@ fun GalaxyMapOverlay(
                         onPlotRoute(previewRoute)
                     }
                 },
-                onFlyToNextGate = onEngageAutopilotToNextGate,
+                onPlotAndEngageAutopilot = {
+                    if (previewRoute.size >= 2) {
+                        onPlotAndEngageAutopilot(previewRoute)
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .widthIn(min = 240.dp, max = 300.dp)
+                    .widthIn(min = 256.dp, max = 330.dp)
             )
         }
     }
@@ -510,7 +536,7 @@ private fun SectorInfoCard(
     routeToSelected: List<String>,
     isRoutePlotted: Boolean,
     onPlotRoute: () -> Unit,
-    onFlyToNextGate: () -> Unit,
+    onPlotAndEngageAutopilot: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val lang = LocalGameLanguage.current
@@ -522,6 +548,11 @@ private fun SectorInfoCard(
             .clip(RoundedCornerShape(12.dp))
             .background(Color(0xEB071022))
             .border(1.5.dp, accent.copy(alpha = 0.82f), RoundedCornerShape(12.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
             .padding(12.dp)
             .testTag("galaxy_sector_info_card")
     ) {
@@ -592,60 +623,77 @@ private fun SectorInfoCard(
         )
 
         if (!isCurrentSector && routeToSelected.size >= 2) {
-            Text(
-                text = "${strings.galaxyPathWord} (${routeToSelected.size - 1} ${strings.galaxyJumpsWord.lowercase()}): ${routeToSelected.joinToString(" → ")}",
-                style = MaterialTheme.typography.labelSmall,
-                color = CyanLaser,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            val jumps = routeToSelected.size - 1
+            val estSeconds = (jumps * 18).coerceAtLeast(10)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "${strings.sectorMapEtaPrefix}: ~${estSeconds}s • $jumps ${strings.galaxyJumpsWord.lowercase()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AmberCredits,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${strings.galaxyPathWord}: ${routeToSelected.joinToString(" → ")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CyanLaser,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = onPlotRoute,
+                    onClick = onPlotAndEngageAutopilot,
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRoutePlotted) EmeraldHull else CyanLaser,
+                        containerColor = CyanLaser,
                         contentColor = Color(0xFF040A16)
                     ),
                     modifier = Modifier
-                        .weight(1f)
-                        .height(42.dp)
+                        .weight(1.35f)
+                        .height(48.dp)
+                        .testTag("galaxy_card_set_autopilot_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Navigation,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = strings.actionSetAutopilot,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Button(
+                    onClick = onPlotRoute,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRoutePlotted) EmeraldHull else Color(0xFF172742),
+                        contentColor = if (isRoutePlotted) Color(0xFF040A16) else TacticalWhite
+                    ),
+                    modifier = Modifier
+                        .weight(0.75f)
+                        .height(48.dp)
                         .testTag("galaxy_plot_route_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.AltRoute,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = if (isRoutePlotted) strings.galaxyPlotted else strings.galaxyPlotRoute,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
-                        softWrap = false
+                        overflow = TextOverflow.Ellipsis
                     )
-                }
-                if (isRoutePlotted) {
-                    Button(
-                        onClick = onFlyToNextGate,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AmberCredits,
-                            contentColor = Color(0xFF040A16)
-                        ),
-                        modifier = Modifier
-                            .height(42.dp)
-                            .testTag("galaxy_card_fly_gate_button")
-                    ) {
-                        Text(
-                            text = "AUTOPILOT",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
                 }
             }
         }
@@ -830,12 +878,12 @@ private fun DrawScope.drawGalaxyGraph(
             color = baseColor.copy(alpha = if (isOnRoute) 0.98f else 0.72f),
             start = p1,
             end = p2,
-            strokeWidth = if (isOnRoute) 3.0f else if (link.isShortcut) 2.0f else 1.7f,
+            strokeWidth = if (isOnRoute) 3.2f else if (link.isShortcut) 2.0f else 1.7f,
             cap = StrokeCap.Round,
-            pathEffect = if (link.isShortcut) {
-                PathEffect.dashPathEffect(floatArrayOf(9f, 7f), -animPhase * 32f)
-            } else {
-                null
+            pathEffect = when {
+                isOnRoute -> PathEffect.dashPathEffect(floatArrayOf(12f, 8f), -animPhase * 40f)
+                link.isShortcut -> PathEffect.dashPathEffect(floatArrayOf(9f, 7f), -animPhase * 32f)
+                else -> null
             }
         )
     }

@@ -34,8 +34,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
     val language: StateFlow<GameLanguage> = _language.asStateFlow()
 
+    private val _isMenuOpen = MutableStateFlow(false)
+    val isMenuOpen: StateFlow<Boolean> = _isMenuOpen.asStateFlow()
+
+    private val _isInventoryOpen = MutableStateFlow(false)
+    val isInventoryOpen: StateFlow<Boolean> = _isInventoryOpen.asStateFlow()
+
+    private val _isGuideOpen = MutableStateFlow(false)
+    val isGuideOpen: StateFlow<Boolean> = _isGuideOpen.asStateFlow()
+
     private val _isSettingsOpen = MutableStateFlow(false)
     val isSettingsOpen: StateFlow<Boolean> = _isSettingsOpen.asStateFlow()
+
+    private val _isSkillsOpen = MutableStateFlow(false)
+    val isSkillsOpen: StateFlow<Boolean> = _isSkillsOpen.asStateFlow()
+
+    private val _lastCraftOutcome = MutableStateFlow<CraftOutcome?>(null)
+    val lastCraftOutcome: StateFlow<CraftOutcome?> = _lastCraftOutcome.asStateFlow()
 
     private var hudAccumulator = 0f
 
@@ -46,12 +61,72 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         persistence.saveLanguage(lang)
     }
 
+    fun openMenu() {
+        _hudState.value = engine.buildHudSnapshot()
+        _isMenuOpen.value = true
+    }
+
+    fun closeMenu() {
+        _isMenuOpen.value = false
+    }
+
+    fun openInventory() {
+        _hudState.value = engine.buildHudSnapshot()
+        _isInventoryOpen.value = true
+    }
+
+    fun closeInventory() {
+        _isInventoryOpen.value = false
+    }
+
+    fun openGuide() {
+        _isGuideOpen.value = true
+    }
+
+    fun closeGuide() {
+        _isGuideOpen.value = false
+    }
+
     fun openSettings() {
         _isSettingsOpen.value = true
     }
 
     fun closeSettings() {
         _isSettingsOpen.value = false
+    }
+
+    fun openSkills() {
+        _hudState.value = engine.buildHudSnapshot()
+        _isSkillsOpen.value = true
+    }
+
+    fun closeSkills() {
+        _isSkillsOpen.value = false
+    }
+
+    fun openSkillsFromMenu() {
+        _isMenuOpen.value = false
+        openSkills()
+    }
+
+    fun openHangarFromMenu() {
+        _isMenuOpen.value = false
+        openHangar()
+    }
+
+    fun openInventoryFromMenu() {
+        _isMenuOpen.value = false
+        openInventory()
+    }
+
+    fun openGuideFromMenu() {
+        _isMenuOpen.value = false
+        openGuide()
+    }
+
+    fun openSettingsFromMenu() {
+        _isMenuOpen.value = false
+        openSettings()
     }
 
     fun continueAsSavedPilot() {
@@ -158,12 +233,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeStation() {
+        _lastCraftOutcome.value = null
         engine.closeStation()
         _hudState.value = engine.buildHudSnapshot()
     }
 
-    fun refineResource(type: ResourceType, refineAll: Boolean) {
-        if (engine.refineResource(type, refineAll)) {
+    fun switchStationTab(kind: StationKind) {
+        if (engine.switchStationTab(kind)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun craftStationRecipe(recipeId: StationCraftRecipeId) {
+        val outcome = engine.craftStationRecipe(recipeId)
+        if (outcome != null) {
+            _lastCraftOutcome.value = outcome
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun clearCraftOutcome() {
+        _lastCraftOutcome.value = null
+    }
+
+    fun refineResource(type: ResourceType, requestedUnits: Int) {
+        if (engine.refineResource(type, requestedUnits)) {
             _hudState.value = engine.buildHudSnapshot()
         }
     }
@@ -182,6 +276,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun buyMarketEquipment(itemId: EquipmentItemId) {
         if (engine.buyMarketEquipment(itemId)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun buyBasicVendorItem(itemId: BasicVendorItemId) {
+        if (engine.buyBasicVendorItem(itemId)) {
             _hudState.value = engine.buildHudSnapshot()
         }
     }
@@ -262,20 +362,40 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _hudState.value = engine.buildHudSnapshot()
     }
 
+    fun plotRouteAndEngageAutopilot(route: List<String>) {
+        if (engine.plotRouteAndEngageAutopilot(route)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
     fun engageAutopilotToNextRoutePortal() {
         if (engine.engageAutopilotToNextRoutePortal()) {
             _hudState.value = engine.buildHudSnapshot()
         }
     }
 
-    fun setAutopilotTarget(worldX: Float, worldY: Float) {
-        engine.setAutopilotTarget(worldX, worldY)
+    fun setAutoMoveTarget(worldX: Float, worldY: Float) {
+        engine.setAutoMoveTarget(worldX, worldY)
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun clearAutoMoveTarget() {
+        if (engine.autoMoveTarget != null) {
+            engine.clearAutoMoveTarget()
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun setAutopilotTarget(worldX: Float, worldY: Float, label: String? = null, closeMap: Boolean = false) {
+        engine.setAutoMoveTarget(worldX, worldY)
+        if (closeMap) {
+            engine.closeTacticalMap()
+        }
         _hudState.value = engine.buildHudSnapshot()
     }
 
     fun cancelAutopilot() {
-        engine.cancelAutopilot()
-        _hudState.value = engine.buildHudSnapshot()
+        clearAutoMoveTarget()
     }
 
     fun triggerJumpGate() {
@@ -290,6 +410,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun selectCapsule() {
+        if (engine.selectCapsule()) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun selectCraftedShip(instanceId: Int) {
+        if (engine.selectCraftedShip(instanceId)) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
     fun buyEquipment(itemId: EquipmentItemId) {
         if (engine.buyEquipment(itemId)) {
             _hudState.value = engine.buildHudSnapshot()
@@ -298,6 +430,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun buyFlaxVant() {
         if (engine.buyFlaxVant()) {
+            _hudState.value = engine.buildHudSnapshot()
+        }
+    }
+
+    fun repairVant(vantId: Int) {
+        if (engine.repairVant(vantId)) {
             _hudState.value = engine.buildHudSnapshot()
         }
     }
@@ -381,8 +519,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _hudState.value = engine.buildHudSnapshot()
     }
 
-    fun debugAddOneLevel() {
-        engine.debugAddOneLevel()
+    fun toggleAdminMode() {
+        engine.toggleAdminMode()
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun adminCycleSkillLevel(skill: SkillType) {
+        engine.adminCycleSkillLevel(skill)
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun adminSetSkillLevel(skill: SkillType, level: Int) {
+        engine.adminSetSkillLevel(skill, level)
+        _hudState.value = engine.buildHudSnapshot()
+    }
+
+    fun adminSetAllSkillsLevel(level: Int) {
+        engine.adminSetAllSkillsLevel(level)
         _hudState.value = engine.buildHudSnapshot()
     }
 }

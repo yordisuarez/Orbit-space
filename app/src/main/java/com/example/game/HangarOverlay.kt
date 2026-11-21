@@ -1,6 +1,7 @@
 package com.example.game
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Flag
@@ -41,6 +43,8 @@ import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -59,9 +63,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ui.theme.AlienCoreOrange
@@ -80,10 +87,13 @@ import com.example.ui.theme.TacticalWhite
 fun HangarShopOverlay(
     hud: HudSnapshot,
     onSwitchConfig: (Int) -> Unit,
+    onSelectCapsule: () -> Unit,
+    onSelectCraftedShip: (Int) -> Unit,
     onBuyOrSelectShipClass: (ShipClass) -> Unit,
     onBuyOrSelectFormation: (DroneFormation) -> Unit,
     onBuyEquipment: (EquipmentItemId) -> Unit,
     onBuyFlaxVant: () -> Unit,
+    onRepairVant: (Int) -> Unit,
     onFuseItems: (EquipmentItemId) -> Unit,
     onFuseFlaxVants: () -> Unit,
     onEquipFromInventory: (Int) -> Unit,
@@ -96,12 +106,15 @@ fun HangarShopOverlay(
     onClaimMissionReward: () -> Unit,
     onResetSave: () -> Unit,
     onDebugAddCredits: () -> Unit,
-    onDebugAddLevel: () -> Unit,
+    onToggleAdminMode: () -> Unit,
     onClose: () -> Unit
 ) {
     // 0 = EQUIPMENT, 1 = VANTS, 2 = SHOP, 3 = FUSE, 4 = MISSIONS
     var selectedTab by remember { mutableIntStateOf(0) }
     val equipment = hud.equipment
+    val lang = LocalGameLanguage.current
+    val strings = GameStrings.of(lang)
+    val canSwapShips = hud.inSafeZone
 
     Box(
         contentAlignment = Alignment.Center,
@@ -302,11 +315,40 @@ fun HangarShopOverlay(
             // 2. Compact Live Ship Stats Summary Bar + Config 1 / Config 2 Toggle + Dev & Reset Buttons
             LiveStatsSummaryBar(
                 equipment = equipment,
+                isAdminMode = hud.isAdminMode,
                 onSwitchConfig = onSwitchConfig,
                 onResetSave = onResetSave,
                 onDebugAddCredits = onDebugAddCredits,
-                onDebugAddLevel = onDebugAddLevel
+                onToggleAdminMode = onToggleAdminMode
             )
+
+            if (!canSwapShips) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x33FBBF24))
+                        .border(1.dp, AmberCredits.copy(alpha = 0.72f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("hangar_readonly_notice")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = AmberCredits,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = strings.hangarReadOnlyNotice,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberCredits,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
 
             // 3. Active Tab Content
             Box(
@@ -317,7 +359,13 @@ fun HangarShopOverlay(
                 when (selectedTab) {
                     0 -> EquipmentTabContent(
                         equipment = equipment,
+                        craftedShips = hud.craftedHangarShips,
+                        canSwapShips = canSwapShips,
+                        lang = lang,
+                        strings = strings,
                         onSwitchConfig = onSwitchConfig,
+                        onSelectCapsule = onSelectCapsule,
+                        onSelectCraftedShip = onSelectCraftedShip,
                         onSelectShipClass = onBuyOrSelectShipClass,
                         onEquipFromInventory = onEquipFromInventory,
                         onUnequipLaserSlot = onUnequipLaserSlot,
@@ -326,13 +374,18 @@ fun HangarShopOverlay(
                     )
                     1 -> VantsTabContent(
                         equipment = equipment,
+                        credits = hud.credits,
+                        canSwapShips = canSwapShips,
+                        strings = strings,
                         onEquipItemToVantSlot = onEquipItemToVantSlot,
                         onEquipFromInventoryToVant = onEquipFromInventoryToVant,
-                        onUnequipVantSlot = onUnequipVantSlot
+                        onUnequipVantSlot = onUnequipVantSlot,
+                        onRepairVant = onRepairVant
                     )
                     2 -> ShopTabContent(
                         credits = hud.credits,
                         equipment = equipment,
+                        canSwapShips = canSwapShips,
                         onBuyOrSelectShipClass = onBuyOrSelectShipClass,
                         onBuyOrSelectFormation = onBuyOrSelectFormation,
                         onBuyEquipment = onBuyEquipment,
@@ -394,12 +447,17 @@ private fun HangarTabButton(
 @Composable
 private fun LiveStatsSummaryBar(
     equipment: EquipmentSnapshot,
+    isAdminMode: Boolean,
     onSwitchConfig: (Int) -> Unit,
     onResetSave: () -> Unit,
     onDebugAddCredits: () -> Unit,
-    onDebugAddLevel: () -> Unit
+    onToggleAdminMode: () -> Unit
 ) {
-    val shipAccent = Color(equipment.activeShipClass.accentColorHex)
+    val shipAccent = shipAccentForHull(
+        role = equipment.activeShipRole,
+        industrialType = equipment.activeIndustrialType,
+        shipClass = equipment.activeShipClass
+    )
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -440,21 +498,24 @@ private fun LiveStatsSummaryBar(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
                 .background(shipAccent.copy(alpha = 0.14f))
                 .border(1.dp, shipAccent.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 7.dp, vertical = 4.dp)
+                .padding(horizontal = 6.dp, vertical = 3.dp)
         ) {
-            Icon(
-                imageVector = Icons.Default.RocketLaunch,
-                contentDescription = null,
-                tint = shipAccent,
-                modifier = Modifier.size(12.dp)
+            ShipHullMiniPreview(
+                role = equipment.activeShipRole,
+                industrialType = equipment.activeIndustrialType,
+                shipClass = equipment.activeShipClass,
+                accent = shipAccent,
+                boxSize = 22.dp,
+                showFrame = false,
+                showThrusterFlames = false
             )
             Text(
-                text = equipment.activeShipClass.displayName.uppercase(),
+                text = equipment.activeShipDisplayName.uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = shipAccent,
                 maxLines = 1,
@@ -513,20 +574,23 @@ private fun LiveStatsSummaryBar(
                 )
             }
 
+            val adminBg = if (isAdminMode) Color(0x3834D399) else Color(0x2864748B)
+            val adminBorder = if (isAdminMode) AmberCredits else Color(0xFF64748B)
+            val adminTextColor = if (isAdminMode) Color(0xFFFDE68A) else Color(0xFF94A3B8)
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .clip(RoundedCornerShape(7.dp))
-                    .background(Color(0x33A855F7))
-                    .border(1.dp, Color(0xFFC084FC), RoundedCornerShape(7.dp))
-                    .clickable(onClick = onDebugAddLevel)
+                    .background(adminBg)
+                    .border(1.2.dp, adminBorder, RoundedCornerShape(7.dp))
+                    .clickable(onClick = onToggleAdminMode)
                     .padding(horizontal = 8.dp, vertical = 5.dp)
-                    .testTag("hangar_debug_add_level")
+                    .testTag("hangar_admin_mode_toggle")
             ) {
                 Text(
-                    text = stringResource(R.string.action_debug_add_level),
+                    text = if (isAdminMode) "ADMIN: ON" else "ADMIN: OFF",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFE9D5FF),
+                    color = adminTextColor,
                     maxLines = 1,
                     softWrap = false
                 )
@@ -598,7 +662,13 @@ private fun LiveStatPill(
 @Composable
 private fun EquipmentTabContent(
     equipment: EquipmentSnapshot,
+    craftedShips: List<CraftedShipRecord>,
+    canSwapShips: Boolean,
+    lang: GameLanguage,
+    strings: GameText,
     onSwitchConfig: (Int) -> Unit,
+    onSelectCapsule: () -> Unit,
+    onSelectCraftedShip: (Int) -> Unit,
     onSelectShipClass: (ShipClass) -> Unit,
     onEquipFromInventory: (Int) -> Unit,
     onUnequipLaserSlot: (Int) -> Unit,
@@ -611,7 +681,306 @@ private fun EquipmentTabContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
-        // Row: Config 1/2 Switcher + Owned Ship Switcher + Dedicated Sector Chip Slot
+        // My Ships Fleet Panel: Permanent Pilot Capsule (always available) + Crafted Ships + Owned Combat Ships
+        Column(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF071020))
+                .border(1.dp, CyanLaser.copy(alpha = 0.42f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .testTag("hangar_fleet_panel")
+        ) {
+            Text(
+                text = strings.hangarMyShipsTitle,
+                style = MaterialTheme.typography.labelLarge,
+                color = CyanLaser,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+            )
+
+            // Permanent Pilot Capsule Row (cannot be sold or destroyed)
+            val pilotingCapsule = equipment.isFlyingCapsule
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (pilotingCapsule) CyanLaser.copy(alpha = 0.14f) else Color(0xCC040914))
+                    .border(
+                        width = if (pilotingCapsule) 1.5.dp else 1.dp,
+                        color = if (pilotingCapsule) CyanLaser else CyanLaser.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(9.dp)
+                    )
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .testTag("hangar_capsule_card")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    ShipHullMiniPreview(
+                        role = ShipRole.CAPSULE,
+                        industrialType = null,
+                        shipClass = ShipClass.INTERCEPTOR,
+                        accent = CyanLaser,
+                        boxSize = 48.dp,
+                        showThrusterFlames = true,
+                        modifier = Modifier.testTag("hangar_capsule_thumbnail")
+                    )
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = strings.capsulePermanentBadge,
+                                tint = CyanLaser,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = strings.capsuleName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = TacticalWhite,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(CyanLaser.copy(alpha = 0.22f))
+                                    .border(1.dp, CyanLaser.copy(alpha = 0.7f), RoundedCornerShape(5.dp))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = strings.capsulePermanentBadge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 9.5.sp,
+                                    color = CyanLaser,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                        Text(
+                            text = "HP ${CapsulePermanentConfig.BASE_HULL.toInt()} • SHD ${(CapsulePermanentConfig.BASE_SHIELD + CapsulePermanentConfig.PERMANENT_SHIELD_BONUS).toInt()} • Cargo ${CapsulePermanentConfig.CARGO_CAPACITY} • ${strings.capsuleCannotSellHint}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TacticalMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = onSelectCapsule,
+                    enabled = canSwapShips && !pilotingCapsule,
+                    contentPadding = PaddingValues(horizontal = 11.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyanLaser,
+                        contentColor = SpaceVoid,
+                        disabledContainerColor = if (pilotingCapsule) EmeraldHull.copy(alpha = 0.24f) else Color(0xFF1A2438),
+                        disabledContentColor = if (pilotingCapsule) EmeraldHull else TacticalMuted
+                    ),
+                    modifier = Modifier
+                        .height(36.dp)
+                        .testTag("hangar_select_capsule")
+                ) {
+                    Text(
+                        text = if (pilotingCapsule) strings.hangarPilotingBadge else strings.hangarSwitchShip,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+
+            // Crafted Industrial Ships
+            craftedShips.forEach { ship ->
+                val isPiloting = !equipment.isFlyingCapsule && equipment.activeCraftedShipId == ship.instanceId
+                val qColor = hangarQualityColor(ship.quality)
+                val bonusInt = Math.round(ship.quality.bonusPct * 100f)
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(if (isPiloting) EmeraldHull.copy(alpha = 0.14f) else Color(0xCC040914))
+                        .border(
+                            width = if (isPiloting) 1.5.dp else 1.dp,
+                            color = if (isPiloting) EmeraldHull else qColor.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(9.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                        .testTag("hangar_crafted_ship_${ship.instanceId}")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        ShipHullMiniPreview(
+                            role = ShipRole.INDUSTRIAL,
+                            industrialType = ship.industrialType,
+                            shipClass = ShipClass.INTERCEPTOR,
+                            accent = shipAccentForHull(ShipRole.INDUSTRIAL, ship.industrialType, ShipClass.INTERCEPTOR),
+                            boxSize = 46.dp,
+                            showThrusterFlames = false
+                        )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = GameStrings.stationCraftRecipeName(ship.recipeId, lang),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = TacticalWhite,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(qColor.copy(alpha = 0.18f))
+                                        .border(1.dp, qColor, RoundedCornerShape(5.dp))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = "${GameStrings.craftQualityName(ship.quality, lang)} +$bonusInt%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 9.5.sp,
+                                        color = qColor,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "HP ${ship.effectiveHull} • SHD ${ship.effectiveShield} • Cargo ${ship.effectiveCargo}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TacticalMuted,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = { onSelectCraftedShip(ship.instanceId) },
+                        enabled = canSwapShips && !isPiloting,
+                        contentPadding = PaddingValues(horizontal = 11.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldHull,
+                            contentColor = SpaceVoid,
+                            disabledContainerColor = if (isPiloting) EmeraldHull.copy(alpha = 0.24f) else Color(0xFF1A2438),
+                            disabledContentColor = if (isPiloting) EmeraldHull else TacticalMuted
+                        ),
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("hangar_select_crafted_${ship.instanceId}")
+                    ) {
+                        Text(
+                            text = if (isPiloting) strings.hangarPilotingBadge else strings.hangarSwitchShip,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+
+            // Owned Combat Ships (if any)
+            ShipClass.entries.filter { it in equipment.ownedShipClasses }.forEach { ship ->
+                val isPiloting = !equipment.isFlyingCapsule && equipment.activeCraftedShipId == null && equipment.activeShipClass == ship
+                val accent = Color(ship.accentColorHex)
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(if (isPiloting) accent.copy(alpha = 0.14f) else Color(0xCC040914))
+                        .border(
+                            width = if (isPiloting) 1.5.dp else 1.dp,
+                            color = if (isPiloting) accent else accent.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(9.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        ShipHullMiniPreview(
+                            role = ShipRole.COMBAT,
+                            industrialType = null,
+                            shipClass = ship,
+                            accent = accent,
+                            boxSize = 44.dp,
+                            showThrusterFlames = false
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${ship.displayName} (${ship.roleLabel})",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = TacticalWhite,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "HP ${ship.baseHull.toInt()} • SPD ${ship.speed.toInt()} • ${ship.laserSlotCount} LSR / ${ship.shieldSlotCount} SHD",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TacticalMuted,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { onSelectShipClass(ship) },
+                        enabled = canSwapShips && !isPiloting,
+                        contentPadding = PaddingValues(horizontal = 11.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accent,
+                            contentColor = SpaceVoid,
+                            disabledContainerColor = if (isPiloting) EmeraldHull.copy(alpha = 0.24f) else Color(0xFF1A2438),
+                            disabledContentColor = if (isPiloting) EmeraldHull else TacticalMuted
+                        ),
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("hangar_select_combat_${ship.name.lowercase()}")
+                    ) {
+                        Text(
+                            text = if (isPiloting) strings.hangarPilotingBadge else strings.hangarSwitchShip,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+
+            if (craftedShips.isEmpty() && equipment.ownedShipClasses.isEmpty()) {
+                Text(
+                    text = strings.hangarCraftedShipsEmpty,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TacticalMuted,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+
+        // Row: Config 1/2 Switcher + Dedicated Sector Chip Slot
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -640,40 +1009,6 @@ private fun EquipmentTabContent(
                     tag = "hangar_config_2_button",
                     onClick = { onSwitchConfig(2) }
                 )
-            }
-
-            // Quick switch between owned Ship Classes
-            if (equipment.ownedShipClasses.size > 1) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF071020))
-                        .border(1.dp, SpaceHudBorder, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 7.dp, vertical = 6.dp)
-                ) {
-                    ShipClass.entries.filter { it in equipment.ownedShipClasses }.forEach { ship ->
-                        val active = ship == equipment.activeShipClass
-                        val accent = Color(ship.accentColorHex)
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (active) accent else Color.Transparent)
-                                .clickable { onSelectShipClass(ship) }
-                                .padding(horizontal = 7.dp, vertical = 5.dp)
-                                .testTag("quick_ship_${ship.name.lowercase()}")
-                        ) {
-                            Text(
-                                text = ship.displayName.take(4).uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (active) SpaceVoid else TacticalMuted,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
-                }
             }
 
             // Dedicated Sector Chip Slot
@@ -736,34 +1071,95 @@ private fun EquipmentTabContent(
             }
         }
 
-        // Dynamic Laser Slots (4 / 6 / 8) & Shield Slots (3 / 6 / 10)
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            val usedLasers = equipment.laserSlots.count { it != null }
-            DynamicSlotGridPanel(
-                title = "${stringResource(R.string.hangar_laser_slots)} ($usedLasers/${equipment.laserSlots.size})",
-                accent = AlienCoreOrange,
-                slots = equipment.laserSlots,
-                columns = if (equipment.laserSlots.size >= 8) 4 else 3,
-                emptyIcon = Icons.Default.Bolt,
-                tagPrefix = "laser_slot",
-                onSlotTap = onUnequipLaserSlot,
-                modifier = Modifier.weight(1f)
-            )
+        // Capsule shows its 3 Fixed Permanent Slots; Boarded ships show editable Laser & Shield Grids
+        if (equipment.isFlyingCapsule) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF071020))
+                    .border(1.dp, CyanLaser.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .padding(10.dp)
+                    .testTag("capsule_permanent_slots_panel")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = CyanLaser,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = strings.capsuleSlotsTitle,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = CyanLaser,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    CapsuleFixedSlotCard(
+                        icon = Icons.Default.Bolt,
+                        title = strings.capsuleSlotLaser,
+                        detail = "+${CapsulePermanentConfig.PERMANENT_LASER_DAMAGE.toInt()} DMG",
+                        badge = strings.capsulePermanentBadge,
+                        accent = AlienCoreOrange,
+                        modifier = Modifier.weight(1f)
+                    )
+                    CapsuleFixedSlotCard(
+                        icon = Icons.Default.Build,
+                        title = strings.capsuleSlotTool,
+                        detail = strings.capsuleSlotToolDetail,
+                        badge = strings.capsulePermanentBadge,
+                        accent = CyanLaser,
+                        modifier = Modifier.weight(1f)
+                    )
+                    CapsuleFixedSlotCard(
+                        icon = Icons.Default.Shield,
+                        title = strings.capsuleSlotShield,
+                        detail = "+${CapsulePermanentConfig.PERMANENT_SHIELD_BONUS.toInt()} SHD",
+                        badge = strings.capsulePermanentBadge,
+                        accent = CyanThruster,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        } else {
+            // Dynamic Laser Slots & Shield Slots for boarded ships
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val usedLasers = equipment.laserSlots.count { it != null }
+                DynamicSlotGridPanel(
+                    title = "${stringResource(R.string.hangar_laser_slots)} ($usedLasers/${equipment.laserSlots.size})",
+                    accent = AlienCoreOrange,
+                    slots = equipment.laserSlots,
+                    columns = if (equipment.laserSlots.size >= 8) 4 else 3,
+                    emptyIcon = Icons.Default.Bolt,
+                    tagPrefix = "laser_slot",
+                    onSlotTap = onUnequipLaserSlot,
+                    modifier = Modifier.weight(1f)
+                )
 
-            val usedShields = equipment.shieldSlots.count { it != null }
-            DynamicSlotGridPanel(
-                title = "${stringResource(R.string.hangar_shield_slots)} ($usedShields/${equipment.shieldSlots.size})",
-                accent = CyanThruster,
-                slots = equipment.shieldSlots,
-                columns = if (equipment.shieldSlots.size >= 8) 5 else 3,
-                emptyIcon = Icons.Default.Shield,
-                tagPrefix = "shield_slot",
-                onSlotTap = onUnequipShieldSlot,
-                modifier = Modifier.weight(1f)
-            )
+                val usedShields = equipment.shieldSlots.count { it != null }
+                DynamicSlotGridPanel(
+                    title = "${stringResource(R.string.hangar_shield_slots)} ($usedShields/${equipment.shieldSlots.size})",
+                    accent = CyanThruster,
+                    slots = equipment.shieldSlots,
+                    columns = if (equipment.shieldSlots.size >= 8) 5 else 3,
+                    emptyIcon = Icons.Default.Shield,
+                    tagPrefix = "shield_slot",
+                    onSlotTap = onUnequipShieldSlot,
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
 
         // Player Inventory section (unequipped owned items)
@@ -949,15 +1345,80 @@ private fun EquipmentSquareTile(
     }
 }
 
+@Composable
+private fun CapsuleFixedSlotCard(
+    icon: ImageVector,
+    title: String,
+    detail: String,
+    badge: String,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(accent.copy(alpha = 0.12f))
+            .border(1.2.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(9.dp))
+            .padding(horizontal = 9.dp, vertical = 8.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = accent,
+                modifier = Modifier.size(15.dp)
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = TacticalWhite,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text(
+            text = detail,
+            style = MaterialTheme.typography.labelSmall,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = badge,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 9.sp,
+            color = TacticalMuted,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+    }
+}
+
+private fun hangarQualityColor(quality: CraftQuality): Color = when (quality) {
+    CraftQuality.STANDARD -> Color(0xFFE2E8F0)
+    CraftQuality.REINFORCED -> Color(0xFF4ADE80)
+    CraftQuality.EXCELLENT -> Color(0xFFA855F7)
+    CraftQuality.MASTERWORK -> Color(0xFFFACC15)
+}
+
 // =============================================================================
 // TAB 1: VANTS (ORBITAL DRONES: FLAX & IRIS WITH CONFIG 1 / 2 UNIVERSAL SLOTS)
 // =============================================================================
 @Composable
 private fun VantsTabContent(
     equipment: EquipmentSnapshot,
+    credits: Int,
+    canSwapShips: Boolean,
+    strings: GameText,
     onEquipItemToVantSlot: (Int, Int) -> Unit,
     onEquipFromInventoryToVant: (Int) -> Unit,
-    onUnequipVantSlot: (Int, Int) -> Unit
+    onUnequipVantSlot: (Int, Int) -> Unit,
+    onRepairVant: (Int) -> Unit
 ) {
     val compatibleInventory = remember(equipment.inventory) {
         equipment.inventory.filter {
@@ -1042,6 +1503,9 @@ private fun VantsTabContent(
                                 vant = vant,
                                 indexLabel = "#${idx + 1}",
                                 hasCompatibleInventory = compatibleInventory.isNotEmpty(),
+                                credits = credits,
+                                canRepairHere = canSwapShips,
+                                strings = strings,
                                 onSlotTap = { slotIdx, occupied ->
                                     if (occupied) {
                                         onUnequipVantSlot(vant.id, slotIdx)
@@ -1049,6 +1513,7 @@ private fun VantsTabContent(
                                         onEquipItemToVantSlot(vant.id, slotIdx)
                                     }
                                 },
+                                onRepair = { onRepairVant(vant.id) },
                                 modifier = Modifier.weight(1f)
                             )
                         } else {
@@ -1123,12 +1588,22 @@ private fun VantDroneCard(
     vant: VantSnapshot,
     indexLabel: String,
     hasCompatibleInventory: Boolean,
+    credits: Int,
+    canRepairHere: Boolean,
+    strings: GameText,
     onSlotTap: (Int, Boolean) -> Unit,
+    onRepair: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isIris = vant.tier == VantTier.IRIS
     val accent = Color(vant.tier.accentColorHex)
     val primary = Color(vant.tier.primaryColorHex)
+    val durColor = when {
+        vant.durabilityPct >= 100 -> EmeraldHull
+        vant.durabilityPct >= 50 -> AmberCredits
+        else -> CrimsonDanger
+    }
+    val repairCost = ((100 - vant.durabilityPct) * 2).coerceAtLeast(10)
 
     Column(
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1148,7 +1623,7 @@ private fun VantDroneCard(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             VantMiniPreview(tier = vant.tier)
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "${vant.tier.shortCode} $indexLabel",
                     style = MaterialTheme.typography.labelLarge,
@@ -1157,11 +1632,38 @@ private fun VantDroneCard(
                     softWrap = false
                 )
                 Text(
-                    text = "${vant.tier.slotCount} ${if (vant.tier.slotCount == 1) "SLOT" else "SLOTS"}",
+                    text = "${strings.vantDurabilityPrefix}: ${vant.durabilityPct}%",
                     style = MaterialTheme.typography.labelSmall,
-                    color = TacticalMuted,
+                    color = durColor,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     softWrap = false
+                )
+            }
+        }
+
+        if (vant.durabilityPct < 100) {
+            Button(
+                onClick = onRepair,
+                enabled = canRepairHere && credits >= repairCost,
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = durColor,
+                    contentColor = SpaceVoid,
+                    disabledContainerColor = Color(0xFF1A2438),
+                    disabledContentColor = TacticalMuted
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(28.dp)
+                    .testTag("repair_vant_${vant.id}")
+            ) {
+                Text(
+                    text = "${strings.vantRepairAction} ($repairCost CR)",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
                 )
             }
         }
@@ -1292,6 +1794,7 @@ private fun VantMiniPreview(tier: VantTier) {
 private fun ShopTabContent(
     credits: Int,
     equipment: EquipmentSnapshot,
+    canSwapShips: Boolean,
     onBuyOrSelectShipClass: (ShipClass) -> Unit,
     onBuyOrSelectFormation: (DroneFormation) -> Unit,
     onBuyEquipment: (EquipmentItemId) -> Unit,
@@ -1319,8 +1822,8 @@ private fun ShopTabContent(
             ) {
                 ShipClass.entries.forEach { ship ->
                     val isOwned = ship in equipment.ownedShipClasses
-                    val isActive = ship == equipment.activeShipClass
-                    val canAct = isOwned && !isActive || (!isOwned && credits >= ship.cost)
+                    val isActive = !equipment.isFlyingCapsule && equipment.activeCraftedShipId == null && ship == equipment.activeShipClass
+                    val canAct = canSwapShips && ((isOwned && !isActive) || (!isOwned && credits >= ship.cost))
                     val accent = Color(ship.accentColorHex)
 
                     Column(
@@ -1737,63 +2240,85 @@ private fun FormationMiniPreview(formation: DroneFormation) {
     }
 }
 
+private fun shipAccentForHull(
+    role: ShipRole,
+    industrialType: IndustrialType?,
+    shipClass: ShipClass
+): Color = when (role) {
+    ShipRole.CAPSULE -> CyanLaser
+    ShipRole.INDUSTRIAL -> when (industrialType ?: IndustrialType.MINER) {
+        IndustrialType.MINER -> AmberCredits
+        IndustrialType.PLASMA_COLLECTOR -> CyanThruster
+        IndustrialType.MEDIUM_HAULER -> Color(0xFFF97316)
+        IndustrialType.HEAVY_HAULER -> Color(0xFFFBBF24)
+    }
+    ShipRole.COMBAT -> Color(shipClass.accentColorHex)
+}
+
 @Composable
-private fun ShipClassMiniPreview(shipClass: ShipClass) {
-    val fill = Color(shipClass.primaryColorHex)
-    val accent = Color(shipClass.accentColorHex)
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(40.dp)
+private fun ShipHullMiniPreview(
+    role: ShipRole,
+    industrialType: IndustrialType?,
+    shipClass: ShipClass,
+    accent: Color,
+    boxSize: Dp = 44.dp,
+    showFrame: Boolean = true,
+    showThrusterFlames: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val frameModifier = if (showFrame) {
+        modifier
+            .size(boxSize)
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0xFF040914))
-            .border(1.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = 0.68f), RoundedCornerShape(8.dp))
+    } else {
+        modifier.size(boxSize)
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = frameModifier
     ) {
-        Canvas(modifier = Modifier.size(34.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(if (showFrame) 3.dp else 1.dp)) {
             val cx = size.width * 0.5f
             val cy = size.height * 0.5f
-            if (shipClass == ShipClass.BATTLECRUISER) {
-                val previewScale = size.minDimension / 60f
-                withTransform({
-                    translate(left = cx - 1.5f * previewScale, top = cy)
-                    scale(scaleX = previewScale, scaleY = previewScale, pivot = androidx.compose.ui.geometry.Offset.Zero)
-                }) {
-                    drawBattlecruiserShip(
-                        cx = 0f,
-                        cy = 0f,
-                        thrust = 0.35f,
-                        pulse = 0.8f,
-                        time = 0f,
-                        hitFlash = 0f,
-                        showThrusterFlames = false
-                    )
-                }
-            } else {
-                val path = when (shipClass) {
-                    ShipClass.INTERCEPTOR -> Path().apply {
-                        moveTo(cx + 11f, cy)
-                        lineTo(cx - 8f, cy - 9f)
-                        lineTo(cx - 5f, cy)
-                        lineTo(cx - 8f, cy + 9f)
-                        close()
-                    }
-                    ShipClass.DREADNOUGHT -> Path().apply {
-                        moveTo(cx + 12f, cy - 4f)
-                        lineTo(cx + 5f, cy - 11f)
-                        lineTo(cx - 9f, cy - 11f)
-                        lineTo(cx - 11f, cy)
-                        lineTo(cx - 9f, cy + 11f)
-                        lineTo(cx + 5f, cy + 11f)
-                        lineTo(cx + 12f, cy + 4f)
-                        close()
-                    }
-                    ShipClass.BATTLECRUISER -> Path()
-                }
-                drawPath(path = path, color = fill)
-                drawPath(path = path, color = accent, style = Stroke(width = 1.8f))
+            val visualSpan = shipPreviewVisualSpan(role, industrialType, shipClass)
+            val previewScale = size.minDimension / visualSpan
+            withTransform({
+                translate(left = cx, top = cy)
+                scale(
+                    scaleX = previewScale,
+                    scaleY = previewScale,
+                    pivot = androidx.compose.ui.geometry.Offset.Zero
+                )
+            }) {
+                drawShipHull(
+                    role = role,
+                    industrialType = industrialType,
+                    shipClass = shipClass,
+                    cx = 0f,
+                    cy = 0f,
+                    thrust = if (showThrusterFlames) 0.45f else 0.1f,
+                    pulse = 0.8f,
+                    time = 0.6f,
+                    hitFlash = 0f,
+                    showThrusterFlames = showThrusterFlames
+                )
             }
         }
     }
+}
+
+@Composable
+private fun ShipClassMiniPreview(shipClass: ShipClass) {
+    ShipHullMiniPreview(
+        role = ShipRole.COMBAT,
+        industrialType = null,
+        shipClass = shipClass,
+        accent = Color(shipClass.accentColorHex),
+        boxSize = 42.dp,
+        showThrusterFlames = false
+    )
 }
 
 // =============================================================================

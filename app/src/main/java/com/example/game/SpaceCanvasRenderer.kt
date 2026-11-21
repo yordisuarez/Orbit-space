@@ -46,13 +46,15 @@ fun createPopupTextPaint(): Paint {
 
 fun DrawScope.renderSpaceWorld(
     engine: SpaceGameEngine,
-    popupPaint: Paint
+    popupPaint: Paint,
+    cameraZoom: Float = 1.0f
 ) {
     val viewportW = size.width
     val viewportH = size.height
     if (viewportW <= 0f || viewportH <= 0f) return
 
-    val worldScale = computeWorldScale(viewportH)
+    val clampedZoom = cameraZoom.coerceIn(0.6f, 2.5f)
+    val worldScale = computeWorldScale(viewportH) * clampedZoom
     val shakeX = if (engine.screenShake > 0.1f) {
         sin(engine.elapsedTime * 57f) * engine.screenShake
     } else 0f
@@ -114,6 +116,7 @@ fun DrawScope.renderSpaceWorld(
         drawSectorJumpGatePortals(engine, popupPaint, minX, maxX, minY, maxY)
         drawCentralStations(engine, popupPaint, minX, maxX, minY, maxY)
         drawResourceNodes(engine, popupPaint, minX, maxX, minY, maxY)
+        drawAlienWrecks(engine, popupPaint, minX, maxX, minY, maxY)
         drawLootBoxes(engine, minX, maxX, minY, maxY)
 
         if (engine.player.isAlive) {
@@ -166,9 +169,9 @@ fun DrawScope.renderSpaceWorld(
 
         // Draw player ship class silhouette + orbiting VANT drones + Shield/Hull bars
         if (engine.player.isAlive) {
-            val hullR = engine.player.shipClass.hullRadius
+            val hullR = engine.player.hullRadius
             drawOrbitingVants(engine)
-            drawPlayerShip(engine.player, engine.elapsedTime)
+            drawPlayerShip(engine.player, engine.elapsedTime, clampedZoom)
             val hpInt = engine.player.hp.toInt().coerceAtLeast(0)
             val maxHpInt = engine.player.maxHp.toInt().coerceAtLeast(1)
             val hpRatio = (engine.player.hp / engine.player.maxHp).coerceIn(0f, 1f)
@@ -850,8 +853,9 @@ private fun DrawScope.drawResourceNodes(
         // Core gleam
         drawCircle(color = Color.White.copy(alpha = 0.85f * pulse), radius = r * 0.22f, center = center)
 
-        // Compact Tier tag below crystal node
-        val tag = if (res.isYellowCrystal) "★ YELLOW CRYSTAL" else "T${res.tier} ${res.displayName.uppercase()}"
+        // Compact resource tag below crystal node
+        val localizedName = GameStrings.resourceName(res, engine.language).uppercase()
+        val tag = if (res.isYellowCrystal) "★ $localizedName" else "T${res.tier} $localizedName"
         popupPaint.textSize = 10f
         popupPaint.color = android.graphics.Color.argb(215, 4, 7, 17)
         nativeCanvas.drawText(tag, nx + 1f, ny + r + 15f, popupPaint)
@@ -859,8 +863,10 @@ private fun DrawScope.drawResourceNodes(
         popupPaint.color = android.graphics.Color.rgb((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)
         nativeCanvas.drawText(tag, nx, ny + r + 14f, popupPaint)
 
-        // Active Mining Laser Beam & Radial Progress Ring
-        if (node.id == miningId && engine.player.isAlive) {
+        val isExtracting = node.id == miningId && engine.player.isAlive
+
+        // Active Mining Laser Beam
+        if (isExtracting) {
             val shipPos = Offset(engine.player.x, engine.player.y)
             drawLine(
                 color = color.copy(alpha = 0.35f),
@@ -877,19 +883,263 @@ private fun DrawScope.drawResourceNodes(
                 cap = StrokeCap.Round
             )
         }
-        if (node.harvestProgress > 0.01f) {
-            val progR = r + 10f
-            drawArc(
-                color = color,
-                startAngle = -90f,
-                sweepAngle = 360f * node.harvestProgress,
-                useCenter = false,
-                topLeft = Offset(nx - progR, ny - progR),
-                size = Size(progR * 2f, progR * 2f),
-                style = Stroke(width = 3.6f, cap = StrokeCap.Round)
+
+        // Charge indicator (e.g., 3/5) and compact extraction progress bar above node
+        drawExtractionStatusBar(
+            centerX = nx,
+            anchorTopY = ny - r - 12f,
+            charges = node.charges,
+            maxCharges = node.maxCharges,
+            progress = node.harvestProgress,
+            showProgressBar = isExtracting || node.harvestProgress > 0.01f,
+            accentColor = color,
+            accentRgb = rgb,
+            popupPaint = popupPaint
+        )
+    }
+}
+
+/**
+ * Renders salvageable AlienWreck debris fields with fractured hull plates, floating fragments,
+ * expiration countdown, salvage tether beam, charge badge, and compact progress bar.
+ */
+private fun DrawScope.drawAlienWrecks(
+    engine: SpaceGameEngine,
+    popupPaint: Paint,
+    minX: Float,
+    maxX: Float,
+    minY: Float,
+    maxY: Float
+) {
+    if (engine.alienWrecks.isEmpty()) return
+    val salvagingId = engine.activeSalvageWreckId
+    val nativeCanvas = drawContext.canvas.nativeCanvas
+    val wreckViolet = Color(0xFFC084FC)
+    val wreckAmber = Color(0xFFF59E0B)
+    val wreckRgb = 0xC084FC
+
+    for (wreck in engine.alienWrecks) {
+        val wx = wreck.x
+        val wy = wreck.y
+        if (wx + 76f < minX || wx - 76f > maxX || wy + 76f < minY || wy - 76f > maxY) {
+            continue
+        }
+        val center = Offset(wx, wy)
+        val r = wreck.radius
+        val pulse = 0.72f + 0.28f * sin(wreck.pulsePhase)
+        val lowTimeBlink = if (wreck.expirationTimerSec <= 12f) {
+            0.45f + 0.55f * sin(wreck.pulsePhase * 3.4f)
+        } else {
+            1f
+        }
+        val alphaFactor = lowTimeBlink.coerceIn(0.35f, 1f)
+
+        // Subtle violet salvage beacon aura
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    wreckViolet.copy(alpha = 0.30f * pulse * alphaFactor),
+                    wreckAmber.copy(alpha = 0.10f * alphaFactor),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = r * 2.0f
+            ),
+            radius = r * 2.0f,
+            center = center
+        )
+
+        // Fading thin perimeter ring indicating remaining 60s lifetime
+        val lifeRatio = wreck.remainingLifetimeRatio
+        drawArc(
+            color = (if (wreck.expirationTimerSec <= 12f) CrimsonDanger else wreckViolet)
+                .copy(alpha = 0.55f * alphaFactor),
+            startAngle = -90f,
+            sweepAngle = 360f * lifeRatio,
+            useCenter = false,
+            topLeft = Offset(wx - (r + 5f), wy - (r + 5f)),
+            size = Size((r + 5f) * 2f, (r + 5f) * 2f),
+            style = Stroke(width = 1.6f, cap = StrokeCap.Round)
+        )
+
+        // Distinct fractured hull debris geometry (two split jagged hull plates + sparks)
+        rotate(degrees = (wreck.rotationRad * 180f / PI.toFloat()), pivot = center) {
+            // Left/upper torn hull fragment
+            val leftChunk = Path().apply {
+                moveTo(wx - r * 0.92f, wy - r * 0.25f)
+                lineTo(wx - r * 0.15f, wy - r * 0.88f)
+                lineTo(wx + r * 0.24f, wy - r * 0.20f)
+                lineTo(wx - r * 0.18f, wy + r * 0.06f)
+                lineTo(wx - r * 0.72f, wy + r * 0.22f)
+                close()
+            }
+            // Right/lower torn hull fragment offset across a rupture gap
+            val rightChunk = Path().apply {
+                moveTo(wx + r * 0.08f, wy + r * 0.12f)
+                lineTo(wx + r * 0.88f, wy - r * 0.22f)
+                lineTo(wx + r * 0.68f, wy + r * 0.66f)
+                lineTo(wx - r * 0.26f, wy + r * 0.82f)
+                lineTo(wx - r * 0.42f, wy + r * 0.34f)
+                close()
+            }
+
+            val darkHullFill = Color(0xFF1A2233).copy(alpha = 0.95f * alphaFactor)
+            drawPath(leftChunk, color = darkHullFill)
+            drawPath(rightChunk, color = darkHullFill)
+
+            drawPath(
+                leftChunk,
+                color = wreckViolet.copy(alpha = 0.90f * alphaFactor),
+                style = Stroke(width = 1.9f)
+            )
+            drawPath(
+                rightChunk,
+                color = wreckAmber.copy(alpha = 0.85f * alphaFactor),
+                style = Stroke(width = 1.9f)
+            )
+
+            // Exposed glowing rupture arc between the two broken hull halves
+            drawLine(
+                color = Color(0xFFE879F9).copy(alpha = 0.85f * pulse * alphaFactor),
+                start = Offset(wx - r * 0.24f, wy + r * 0.08f),
+                end = Offset(wx + r * 0.28f, wy - r * 0.10f),
+                strokeWidth = 2.2f,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = Color.White.copy(alpha = 0.80f * pulse * alphaFactor),
+                start = Offset(wx - r * 0.10f, wy - r * 0.04f),
+                end = Offset(wx + r * 0.14f, wy + r * 0.08f),
+                strokeWidth = 1.2f,
+                cap = StrokeCap.Round
             )
         }
+
+        // 3 drifting micro-debris shards around the wreck
+        for (i in 0 until 3) {
+            val angle = wreck.rotationRad + i * 2.094f + wreck.pulsePhase * 0.18f
+            val dist = r * 1.18f
+            val dx = wx + cos(angle) * dist
+            val dy = wy + sin(angle) * dist
+            drawRect(
+                color = (if (i == 0) wreckAmber else wreckViolet).copy(alpha = 0.78f * alphaFactor),
+                topLeft = Offset(dx - 2.4f, dy - 1.8f),
+                size = Size(4.8f, 3.6f)
+            )
+        }
+
+        // Compact wreck tag + countdown below debris
+        val secsLeft = wreck.expirationTimerSec.toInt().coerceAtLeast(1)
+        val baseLabel = if (engine.language == GameLanguage.ES) "PECIO" else "WRECK"
+        val wreckTag = if (wreck.fromBoss) "★ $baseLabel • ${secsLeft}s" else "$baseLabel • ${secsLeft}s"
+        popupPaint.textSize = 9.5f
+        popupPaint.color = android.graphics.Color.argb(215, 4, 7, 17)
+        nativeCanvas.drawText(wreckTag, wx + 1f, wy + r + 15f, popupPaint)
+        popupPaint.color = if (wreck.expirationTimerSec <= 12f) {
+            android.graphics.Color.rgb(255, 82, 82)
+        } else {
+            android.graphics.Color.rgb(192, 132, 252)
+        }
+        nativeCanvas.drawText(wreckTag, wx, wy + r + 14f, popupPaint)
+
+        val isSalvaging = wreck.id == salvagingId && engine.player.isAlive
+
+        // Active Salvage Tether Beam
+        if (isSalvaging) {
+            val shipPos = Offset(engine.player.x, engine.player.y)
+            drawLine(
+                color = wreckViolet.copy(alpha = 0.36f),
+                start = shipPos,
+                end = center,
+                strokeWidth = 8.5f,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = Color(0xFFF5D0FE).copy(alpha = 0.94f),
+                start = shipPos,
+                end = center,
+                strokeWidth = 2.4f,
+                cap = StrokeCap.Round
+            )
+        }
+
+        // Charge indicator (e.g., 2/3) and compact salvage progress bar above wreck
+        drawExtractionStatusBar(
+            centerX = wx,
+            anchorTopY = wy - r - 12f,
+            charges = wreck.charges,
+            maxCharges = wreck.maxCharges,
+            progress = wreck.salvageProgress,
+            showProgressBar = isSalvaging || wreck.salvageProgress > 0.01f,
+            accentColor = wreckViolet,
+            accentRgb = wreckRgb,
+            popupPaint = popupPaint
+        )
     }
+}
+
+/**
+ * Draws a compact charge badge (e.g. "3/5") and, while actively extracting/salvaging,
+ * a sleek horizontal progress bar directly above the node or wreck.
+ */
+private fun DrawScope.drawExtractionStatusBar(
+    centerX: Float,
+    anchorTopY: Float,
+    charges: Int,
+    maxCharges: Int,
+    progress: Float,
+    showProgressBar: Boolean,
+    accentColor: Color,
+    accentRgb: Int,
+    popupPaint: Paint
+) {
+    val nativeCanvas = drawContext.canvas.nativeCanvas
+    val barWidth = 48f
+    val barHeight = 5.5f
+    val chargeTextY = if (showProgressBar) {
+        val barTopY = anchorTopY - barHeight
+        val left = centerX - barWidth * 0.5f
+        val clamped = progress.coerceIn(0f, 1f)
+        drawRoundRect(
+            color = Color(0xCC060B18),
+            topLeft = Offset(left, barTopY),
+            size = Size(barWidth, barHeight),
+            cornerRadius = CornerRadius(3f, 3f)
+        )
+        if (clamped > 0.01f) {
+            drawRoundRect(
+                color = accentColor,
+                topLeft = Offset(left + 0.8f, barTopY + 0.8f),
+                size = Size((barWidth - 1.6f) * clamped, barHeight - 1.6f),
+                cornerRadius = CornerRadius(2.4f, 2.4f)
+            )
+        }
+        drawRoundRect(
+            color = accentColor.copy(alpha = 0.85f),
+            topLeft = Offset(left, barTopY),
+            size = Size(barWidth, barHeight),
+            cornerRadius = CornerRadius(3f, 3f),
+            style = Stroke(width = 1.0f)
+        )
+        barTopY - 4f
+    } else {
+        anchorTopY
+    }
+
+    val chargeLabel = "$charges/$maxCharges"
+    popupPaint.textSize = 10f
+    popupPaint.color = android.graphics.Color.argb(225, 4, 7, 17)
+    nativeCanvas.drawText(chargeLabel, centerX + 1f, chargeTextY + 1f, popupPaint)
+    popupPaint.color = if (showProgressBar) {
+        android.graphics.Color.rgb(248, 250, 252)
+    } else {
+        android.graphics.Color.rgb(
+            (accentRgb shr 16) and 0xFF,
+            (accentRgb shr 8) and 0xFF,
+            accentRgb and 0xFF
+        )
+    }
+    nativeCanvas.drawText(chargeLabel, centerX, chargeTextY, popupPaint)
 }
 
 private fun DrawScope.drawSectorJumpGatePortals(
@@ -1436,11 +1686,136 @@ private fun DrawScope.drawTargetLockReticle(alien: AlienEntity, time: Float) {
     }
 }
 
-private fun DrawScope.drawPlayerShip(player: PlayerState, time: Float) {
+internal fun shipPreviewVisualSpan(
+    role: ShipRole,
+    industrialType: IndustrialType?,
+    shipClass: ShipClass
+): Float = when (role) {
+    ShipRole.CAPSULE -> 34f
+    ShipRole.INDUSTRIAL -> when (industrialType ?: IndustrialType.MINER) {
+        IndustrialType.MINER -> 48f
+        IndustrialType.PLASMA_COLLECTOR -> 48f
+        IndustrialType.MEDIUM_HAULER -> 58f
+        IndustrialType.HEAVY_HAULER -> 68f
+    }
+    ShipRole.COMBAT -> when (shipClass) {
+        ShipClass.INTERCEPTOR -> 50f
+        ShipClass.BATTLECRUISER -> 60f
+        ShipClass.DREADNOUGHT -> 66f
+    }
+}
+
+/**
+ * Shared procedural 2D top-down ship hull renderer used identically by BOTH
+ * the main space Canvas and Hangar previews. Explicitly branches on [role]
+ * and [industrialType] so Capsule and Industrial ships never fall back to a combat ship.
+ */
+internal fun DrawScope.drawShipHull(
+    role: ShipRole,
+    industrialType: IndustrialType?,
+    shipClass: ShipClass,
+    cx: Float,
+    cy: Float,
+    thrust: Float,
+    pulse: Float,
+    time: Float,
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true,
+    cameraZoom: Float = 1.0f
+) {
+    when (role) {
+        ShipRole.CAPSULE -> drawCapsuleShip(
+            cx = cx,
+            cy = cy,
+            thrust = thrust,
+            pulse = pulse,
+            time = time,
+            hitFlash = hitFlash,
+            showThrusterFlames = showThrusterFlames,
+            cameraZoom = cameraZoom
+        )
+        ShipRole.INDUSTRIAL -> when (industrialType ?: IndustrialType.MINER) {
+            IndustrialType.MINER -> drawMinerShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames,
+                cameraZoom = cameraZoom
+            )
+            IndustrialType.PLASMA_COLLECTOR -> drawPlasmaCollectorShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames,
+                cameraZoom = cameraZoom
+            )
+            IndustrialType.MEDIUM_HAULER -> drawMediumHaulerShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames,
+                cameraZoom = cameraZoom
+            )
+            IndustrialType.HEAVY_HAULER -> drawHeavyHaulerShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames,
+                cameraZoom = cameraZoom
+            )
+        }
+        ShipRole.COMBAT -> when (shipClass) {
+            ShipClass.INTERCEPTOR -> drawInterceptorShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames
+            )
+            ShipClass.BATTLECRUISER -> drawBattlecruiserShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames
+            )
+            ShipClass.DREADNOUGHT -> drawTankCitadelShip(
+                cx = cx,
+                cy = cy,
+                thrust = thrust,
+                pulse = pulse,
+                time = time,
+                hitFlash = hitFlash,
+                showThrusterFlames = showThrusterFlames
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawPlayerShip(
+    player: PlayerState,
+    time: Float,
+    cameraZoom: Float = 1.0f
+) {
     val center = Offset(player.x, player.y)
     val degrees = Math.toDegrees(player.angleRad.toDouble()).toFloat()
-    val ship = player.shipClass
-    val hullR = ship.hullRadius
+    val hullR = player.hullRadius
 
     if (player.inSafeZone && (player.hp < player.maxHp || player.shield < player.maxShield)) {
         val repairPulse = 0.45f + 0.55f * sin(time * 8f)
@@ -1457,11 +1832,19 @@ private fun DrawScope.drawPlayerShip(player: PlayerState, time: Float) {
     val hitFlash = player.hitFlash.coerceIn(0f, 1f)
 
     rotate(degrees = degrees, pivot = center) {
-        when (ship) {
-            ShipClass.INTERCEPTOR -> drawInterceptorShip(player.x, player.y, thrust, pulse, time, hitFlash)
-            ShipClass.BATTLECRUISER -> drawBattlecruiserShip(player.x, player.y, thrust, pulse, time, hitFlash)
-            ShipClass.DREADNOUGHT -> drawTankCitadelShip(player.x, player.y, thrust, pulse, time, hitFlash)
-        }
+        drawShipHull(
+            role = player.shipRole,
+            industrialType = player.industrialType,
+            shipClass = player.shipClass,
+            cx = player.x,
+            cy = player.y,
+            thrust = thrust,
+            pulse = pulse,
+            time = time,
+            hitFlash = hitFlash,
+            showThrusterFlames = true,
+            cameraZoom = cameraZoom
+        )
     }
 
     // Translucent cyan/blue energy shield bubble flash on Shield Hit (~0.25s smooth fade)
@@ -1497,17 +1880,1279 @@ private fun DrawScope.drawPlayerShip(player: PlayerState, time: Float) {
     }
 }
 
+// =============================================================================
+// PERMANENT STARTING CAPSULE ("HUEVO" / ESCAPE POD) — Top-Down 2D Canvas
+// =============================================================================
+private fun DrawScope.drawCapsuleShip(
+    cx: Float,
+    cy: Float,
+    thrust: Float,
+    pulse: Float,
+    time: Float,
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true,
+    cameraZoom: Float = 1.0f
+) {
+    // 1. Single bright rear rocket thruster flame + tiny side stabilization micro-jets
+    if (showThrusterFlames) {
+        drawRocketThrusterFlame(
+            baseX = cx - 12.2f,
+            baseY = cy,
+            thrust = thrust,
+            maxLen = 19f,
+            halfW = 3.9f,
+            pulse = pulse,
+            phaseOffset = 0.3f,
+            outerColor = Color(0xFFFF6B35),
+            midColor = Color(0xFFFBBF24)
+        )
+    }
+
+    // 2. Two tiny short mechanical rear stabilizer fins (lower-back sides)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val fin = Path().apply {
+            moveTo(cx - 5.5f, cy + sign * 6.8f)
+            lineTo(cx - 12.8f, cy + sign * 11.0f)
+            lineTo(cx - 14.2f, cy + sign * 9.0f)
+            lineTo(cx - 10.6f, cy + sign * 5.2f)
+            close()
+        }
+        drawPath(fin, Color(0xFF283548))
+        drawPath(fin, Color(0xFF94A3B8), style = Stroke(width = 0.85f, join = StrokeJoin.Round))
+        // Tiny red trim stripe along fin edge
+        drawLine(
+            color = Color(0xFFDC2626),
+            start = Offset(cx - 8.0f, cy + sign * 7.8f),
+            end = Offset(cx - 12.6f, cy + sign * 10.1f),
+            strokeWidth = 1.1f,
+            cap = StrokeCap.Round
+        )
+    }
+
+    // Rear central rocket bell nozzle
+    val rocketBell = Path().apply {
+        moveTo(cx - 9.2f, cy - 3.6f)
+        lineTo(cx - 13.4f, cy - 4.5f)
+        lineTo(cx - 13.4f, cy + 4.5f)
+        lineTo(cx - 9.2f, cy + 3.6f)
+        close()
+    }
+    drawPath(rocketBell, Color(0xFF1E293B))
+    drawPath(rocketBell, Color(0xFF94A3B8), style = Stroke(width = 0.9f))
+    drawLine(
+        color = Color(0xFFF97316),
+        start = Offset(cx - 13.1f, cy - 3.3f),
+        end = Offset(cx - 13.1f, cy + 3.3f),
+        strokeWidth = 1.1f
+    )
+
+    // 3. RIGHT SIDE (+y, starboard): Compact single external laser weapon barrel
+    drawRoundRect(
+        color = Color(0xFF334155),
+        topLeft = Offset(cx - 2.5f, cy + 7.2f),
+        size = Size(7.5f, 3.4f),
+        cornerRadius = CornerRadius(1.2f, 1.2f)
+    )
+    drawLine(
+        color = Color(0xFF94A3B8),
+        start = Offset(cx + 4.5f, cy + 8.9f),
+        end = Offset(cx + 12.2f, cy + 8.9f),
+        strokeWidth = 2.0f,
+        cap = StrokeCap.Round
+    )
+    // Energy-charged barrel coils & glowing tip
+    val chargePulse = 0.72f + 0.28f * sin(time * 7.5f)
+    drawLine(
+        color = Color(0xFF38BDF8).copy(alpha = 0.85f * chargePulse),
+        start = Offset(cx + 6.2f, cy + 8.9f),
+        end = Offset(cx + 10.6f, cy + 8.9f),
+        strokeWidth = 1.0f
+    )
+    drawCircle(
+        color = Color(0xFF00E5FF).copy(alpha = 0.55f * chargePulse),
+        radius = 2.3f,
+        center = Offset(cx + 12.2f, cy + 8.9f)
+    )
+    drawCircle(
+        color = Color.White,
+        radius = 0.95f,
+        center = Offset(cx + 12.2f, cy + 8.9f)
+    )
+
+    // 4. LEFT SIDE (-y, port): Industrial multi-purpose extractor / mining arm
+    drawRoundRect(
+        color = Color(0xFF334155),
+        topLeft = Offset(cx - 3.0f, cy - 10.4f),
+        size = Size(6.4f, 3.2f),
+        cornerRadius = CornerRadius(1.2f, 1.2f)
+    )
+    // Articulated arm strut + angled wrist
+    drawLine(
+        color = Color(0xFF94A3B8),
+        start = Offset(cx + 2.8f, cy - 8.9f),
+        end = Offset(cx + 7.6f, cy - 10.5f),
+        strokeWidth = 1.9f,
+        cap = StrokeCap.Round
+    )
+    drawLine(
+        color = Color(0xFFCBD5E1),
+        start = Offset(cx + 7.6f, cy - 10.5f),
+        end = Offset(cx + 11.4f, cy - 8.8f),
+        strokeWidth = 1.6f,
+        cap = StrokeCap.Round
+    )
+    // Extractor drill / emitter tip
+    drawCircle(
+        color = Color(0xFFF59E0B),
+        radius = 1.9f,
+        center = Offset(cx + 11.5f, cy - 8.8f)
+    )
+    drawCircle(
+        color = Color(0xFFFEF08A),
+        radius = 0.85f,
+        center = Offset(cx + 11.5f, cy - 8.8f)
+    )
+
+    // 5. MAIN EGG-SHAPED (OVAL) ARMORED CAPSULE HULL
+    val hullW = 24.4f
+    val hullH = 17.8f
+    val hullTopLeft = Offset(cx - hullW * 0.5f, cy - hullH * 0.5f)
+    val hullSize = Size(hullW, hullH)
+
+    // Dark metallic steel body gradient
+    drawOval(
+        brush = Brush.radialGradient(
+            colors = listOf(Color(0xFF64748B), Color(0xFF334155), Color(0xFF1A2232)),
+            center = Offset(cx + 1.5f, cy - 1.5f),
+            radius = 14.5f
+        ),
+        topLeft = hullTopLeft,
+        size = hullSize
+    )
+
+    // Crimson-red side armor panels flanking the oval hull
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val redPanel = Path().apply {
+            moveTo(cx + 4.8f, cy + sign * 5.1f)
+            lineTo(cx - 1.5f, cy + sign * 7.8f)
+            lineTo(cx - 7.8f, cy + sign * 6.5f)
+            lineTo(cx - 9.4f, cy + sign * 3.8f)
+            lineTo(cx - 2.0f, cy + sign * 4.5f)
+            close()
+        }
+        drawPath(
+            path = redPanel,
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFFEF4444), Color(0xFFB91C1C), Color(0xFF7F1D1D)),
+                start = Offset(cx + 4f, cy + sign * 4f),
+                end = Offset(cx - 9f, cy + sign * 7f)
+            )
+        )
+        drawPath(redPanel, Color(0xFFFCA5A5).copy(alpha = 0.45f), style = Stroke(width = 0.65f))
+    }
+
+    // Center spine ridge & silver-alloy trim outline
+    drawLine(
+        color = Color(0xFFCBD5E1).copy(alpha = 0.65f),
+        start = Offset(cx - 10.2f, cy),
+        end = Offset(cx - 0.5f, cy),
+        strokeWidth = 1.4f,
+        cap = StrokeCap.Round
+    )
+    drawOval(
+        color = Color(0xFFCBD5E1),
+        topLeft = hullTopLeft,
+        size = hullSize,
+        style = Stroke(width = 1.25f)
+    )
+
+    // Subtle rivets along rear armor seam
+    val rivets = arrayOf(
+        Offset(cx - 5.5f, cy - 3.6f),
+        Offset(cx - 5.5f, cy + 3.6f),
+        Offset(cx - 8.4f, cy - 2.0f),
+        Offset(cx - 8.4f, cy + 2.0f)
+    )
+    for (r in rivets) {
+        drawCircle(color = Color(0xFFE2E8F0).copy(alpha = 0.8f), radius = 0.65f, center = r)
+    }
+
+    // 6. PROMINENT GLOWING ROUNDED CYAN GLASS COCKPIT / VISOR NEAR FRONT (+x)
+    val visorW = 8.8f
+    val visorH = 9.4f
+    val visorTopLeft = Offset(cx + 1.8f, cy - visorH * 0.5f)
+    val visorSize = Size(visorW, visorH)
+
+    // Outer metallic visor bezel
+    drawOval(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(visorTopLeft.x - 0.9f, visorTopLeft.y - 0.9f),
+        size = Size(visorW + 1.8f, visorH + 1.8f)
+    )
+    // Glowing cyan canopy dome
+    drawOval(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xFFE0F2FE),
+                Color(0xFF38BDF8),
+                Color(0xFF0284C7),
+                Color(0xFF0C4A6E)
+            ),
+            center = Offset(cx + 7.2f, cy - 1.2f),
+            radius = 6.2f
+        ),
+        topLeft = visorTopLeft,
+        size = visorSize
+    )
+    drawOval(
+        color = Color(0xFF7DD3FC),
+        topLeft = visorTopLeft,
+        size = visorSize,
+        style = Stroke(width = 0.85f)
+    )
+    // Crisp curved glass specular highlight
+    drawLine(
+        color = Color.White.copy(alpha = 0.82f),
+        start = Offset(cx + 7.2f, cy - 2.6f),
+        end = Offset(cx + 8.6f, cy - 0.5f),
+        strokeWidth = 1.2f,
+        cap = StrokeCap.Round
+    )
+
+    // High-Detail LOD (cameraZoom >= 1.35f): allocation-free crisp micro-details
+    if (cameraZoom >= 1.35f) {
+        val lodAlpha = ((cameraZoom - 1.35f) / 0.35f).coerceIn(0.4f, 1f)
+        // Armor panel seam lines along dorsal oval hull
+        drawLine(
+            color = Color(0xFF0F172A).copy(alpha = 0.78f * lodAlpha),
+            start = Offset(cx - 2.2f, cy - 8.4f),
+            end = Offset(cx - 2.2f, cy + 8.4f),
+            strokeWidth = 0.65f
+        )
+        drawLine(
+            color = Color(0xFF0F172A).copy(alpha = 0.72f * lodAlpha),
+            start = Offset(cx - 7.0f, cy - 6.8f),
+            end = Offset(cx - 7.0f, cy + 6.8f),
+            strokeWidth = 0.6f
+        )
+        // Tiny rivet dots along front collar & armor flanks
+        val rivetColor = Color(0xFFF1F5F9).copy(alpha = 0.85f * lodAlpha)
+        drawCircle(rivetColor, 0.38f, Offset(cx - 0.8f, cy - 6.2f))
+        drawCircle(rivetColor, 0.38f, Offset(cx - 0.8f, cy + 6.2f))
+        drawCircle(rivetColor, 0.38f, Offset(cx - 3.6f, cy - 6.8f))
+        drawCircle(rivetColor, 0.38f, Offset(cx - 3.6f, cy + 6.8f))
+        drawCircle(rivetColor, 0.38f, Offset(cx + 1.2f, cy - 5.6f))
+        drawCircle(rivetColor, 0.38f, Offset(cx + 1.2f, cy + 5.6f))
+        // Glowing rear thruster core ring
+        val corePulse = (0.72f + 0.28f * sin(time * 9.5f)) * lodAlpha
+        drawOval(
+            color = Color(0xFFFEF08A).copy(alpha = 0.85f * corePulse),
+            topLeft = Offset(cx - 13.7f, cy - 2.5f),
+            size = Size(1.6f, 5.0f),
+            style = Stroke(width = 0.75f)
+        )
+        // Cockpit glass curved glare reflection arc + secondary glint dot
+        drawArc(
+            color = Color.White.copy(alpha = 0.90f * lodAlpha),
+            startAngle = -68f,
+            sweepAngle = 74f,
+            useCenter = false,
+            topLeft = Offset(visorTopLeft.x + 1.1f, visorTopLeft.y + 1.0f),
+            size = Size(visorW - 2.2f, visorH - 2.0f),
+            style = Stroke(width = 0.85f, cap = StrokeCap.Round)
+        )
+        drawCircle(
+            color = Color(0xFFE0F2FE).copy(alpha = 0.88f * lodAlpha),
+            radius = 0.55f,
+            center = Offset(cx + 5.0f, cy + 2.4f)
+        )
+        // Detailed laser cooling rings & extractor micro-prongs
+        val coilColor = Color(0xFF0F172A).copy(alpha = 0.85f * lodAlpha)
+        drawLine(coilColor, Offset(cx + 6.6f, cy + 7.9f), Offset(cx + 6.6f, cy + 9.9f), strokeWidth = 0.55f)
+        drawLine(coilColor, Offset(cx + 8.6f, cy + 7.9f), Offset(cx + 8.6f, cy + 9.9f), strokeWidth = 0.55f)
+        drawLine(coilColor, Offset(cx + 10.4f, cy + 7.9f), Offset(cx + 10.4f, cy + 9.9f), strokeWidth = 0.55f)
+        val prongColor = Color(0xFFFEF08A).copy(alpha = 0.88f * lodAlpha)
+        drawLine(prongColor, Offset(cx + 11.4f, cy - 9.8f), Offset(cx + 13.2f, cy - 10.3f), strokeWidth = 0.65f, cap = StrokeCap.Round)
+        drawLine(prongColor, Offset(cx + 11.4f, cy - 7.8f), Offset(cx + 13.2f, cy - 7.3f), strokeWidth = 0.65f, cap = StrokeCap.Round)
+    }
+
+    if (hitFlash > 0.01f) {
+        drawOval(
+            color = Color.White.copy(alpha = 0.68f * hitFlash),
+            topLeft = hullTopLeft,
+            size = hullSize
+        )
+    }
+}
+
+// =============================================================================
+// INDUSTRIAL SHIP 1: MINER ("Minera") — Dark Steel + Yellow/Amber + Twin Mining Prongs
+// =============================================================================
+private fun DrawScope.drawMinerShip(
+    cx: Float,
+    cy: Float,
+    thrust: Float,
+    pulse: Float,
+    time: Float,
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true,
+    cameraZoom: Float = 1.0f
+) {
+    // Dual industrial thrusters
+    if (showThrusterFlames) {
+        drawRocketThrusterFlame(cx - 18.2f, cy - 7.6f, thrust, maxLen = 19f, halfW = 3.7f, pulse = pulse, phaseOffset = 0.2f)
+        drawRocketThrusterFlame(cx - 18.2f, cy + 7.6f, thrust, maxLen = 19f, halfW = 3.7f, pulse = pulse, phaseOffset = 2.1f)
+    }
+
+    // Armored rear thruster housings
+    for (sign in floatArrayOf(-1f, 1f)) {
+        drawRoundRect(
+            color = Color(0xFF1E293B),
+            topLeft = Offset(cx - 19.5f, cy + sign * 7.6f - 3.6f),
+            size = Size(6.5f, 7.2f),
+            cornerRadius = CornerRadius(1.4f, 1.4f)
+        )
+        drawRoundRect(
+            color = Color(0xFF64748B),
+            topLeft = Offset(cx - 19.5f, cy + sign * 7.6f - 3.6f),
+            size = Size(6.5f, 7.2f),
+            cornerRadius = CornerRadius(1.4f, 1.4f),
+            style = Stroke(width = 0.9f)
+        )
+    }
+
+    // Chunky side ore pods (port & starboard)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val podTop = if (sign < 0f) cy - 17.8f else cy + 10.6f
+        drawRoundRect(
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF475569), Color(0xFF1E293B)),
+                start = Offset(cx - 10f, podTop),
+                end = Offset(cx + 8f, podTop + 7.2f)
+            ),
+            topLeft = Offset(cx - 11.5f, podTop),
+            size = Size(19.5f, 7.2f),
+            cornerRadius = CornerRadius(2.2f, 2.2f)
+        )
+        // Yellow/amber industrial stripe on each ore pod
+        drawRect(
+            color = Color(0xFFF59E0B),
+            topLeft = Offset(cx - 5.5f, podTop + 1.1f),
+            size = Size(7.5f, 5.0f)
+        )
+        // Dark hazard diagonal cuts across amber band
+        drawLine(
+            color = Color(0xFF1E293B),
+            start = Offset(cx - 4.0f, podTop + 1.1f),
+            end = Offset(cx - 1.8f, podTop + 6.1f),
+            strokeWidth = 1.4f
+        )
+        drawLine(
+            color = Color(0xFF1E293B),
+            start = Offset(cx - 0.6f, podTop + 1.1f),
+            end = Offset(cx + 1.5f, podTop + 6.1f),
+            strokeWidth = 1.4f
+        )
+        drawRoundRect(
+            color = Color(0xFF94A3B8),
+            topLeft = Offset(cx - 11.5f, podTop),
+            size = Size(19.5f, 7.2f),
+            cornerRadius = CornerRadius(2.2f, 2.2f),
+            style = Stroke(width = 1.0f)
+        )
+    }
+
+    // Twin front mining prongs / emitter forks
+    val emitterPulse = 0.7f + 0.3f * sin(time * 8.5f)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val prong = Path().apply {
+            moveTo(cx + 8.5f, cy + sign * 5.2f)
+            lineTo(cx + 21.5f, cy + sign * 8.2f)
+            lineTo(cx + 22.8f, cy + sign * 5.8f)
+            lineTo(cx + 12.5f, cy + sign * 11.5f)
+            lineTo(cx + 6.0f, cy + sign * 10.8f)
+            close()
+        }
+        drawPath(prong, Color(0xFF334155))
+        drawPath(prong, Color(0xFFFACC15), style = Stroke(width = 1.0f, join = StrokeJoin.Round))
+        // Glowing mining laser emitter tip
+        val tip = Offset(cx + 22.2f, cy + sign * 6.8f)
+        drawCircle(color = Color(0xFFF59E0B).copy(alpha = 0.55f * emitterPulse), radius = 3.2f, center = tip)
+        drawCircle(color = Color(0xFFFEF08A), radius = 1.35f, center = tip)
+    }
+    // Subtle energy hum line between twin prongs
+    drawLine(
+        color = Color(0xFFFBBF24).copy(alpha = 0.35f * emitterPulse),
+        start = Offset(cx + 21.6f, cy - 6.6f),
+        end = Offset(cx + 21.6f, cy + 6.6f),
+        strokeWidth = 1.1f
+    )
+
+    // Rugged central industrial chassis (dark steel)
+    val chassis = Path().apply {
+        moveTo(cx + 13.5f, cy - 6.8f)
+        lineTo(cx + 9.0f, cy - 11.8f)
+        lineTo(cx - 14.5f, cy - 12.0f)
+        lineTo(cx - 16.5f, cy - 7.5f)
+        lineTo(cx - 16.5f, cy + 7.5f)
+        lineTo(cx - 14.5f, cy + 12.0f)
+        lineTo(cx + 9.0f, cy + 11.8f)
+        lineTo(cx + 13.5f, cy + 6.8f)
+        close()
+    }
+    drawPath(
+        path = chassis,
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF475569), Color(0xFF283548), Color(0xFF1E293B)),
+            start = Offset(cx + 14f, cy - 12f),
+            end = Offset(cx - 16f, cy + 12f)
+        )
+    )
+    drawPath(chassis, Color(0xFF94A3B8), style = Stroke(width = 1.3f, join = StrokeJoin.Round))
+
+    // Bold amber chevron accent on dorsal hull
+    val chevron = Path().apply {
+        moveTo(cx + 4.0f, cy)
+        lineTo(cx - 3.5f, cy - 7.5f)
+        lineTo(cx - 8.2f, cy - 7.5f)
+        lineTo(cx - 1.2f, cy)
+        lineTo(cx - 8.2f, cy + 7.5f)
+        lineTo(cx - 3.5f, cy + 7.5f)
+        close()
+    }
+    drawPath(chevron, Color(0xFFF59E0B))
+    drawPath(chevron, Color(0xFFFDE68A).copy(alpha = 0.7f), style = Stroke(width = 0.7f))
+
+    // Armored forward cockpit canopy with roll-cage bars
+    drawRoundRect(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx + 3.2f, cy - 5.2f),
+        size = Size(8.4f, 10.4f),
+        cornerRadius = CornerRadius(2.4f, 2.4f)
+    )
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF38BDF8), Color(0xFF0284C7)),
+            start = Offset(cx + 11f, cy - 4f),
+            end = Offset(cx + 4f, cy + 4f)
+        ),
+        topLeft = Offset(cx + 4.3f, cy - 4.1f),
+        size = Size(6.2f, 8.2f),
+        cornerRadius = CornerRadius(1.8f, 1.8f)
+    )
+    // Roll-cage strut
+    drawLine(
+        color = Color(0xFF334155),
+        start = Offset(cx + 4.3f, cy),
+        end = Offset(cx + 10.5f, cy),
+        strokeWidth = 1.1f
+    )
+
+    // High-Detail LOD (cameraZoom >= 1.35f): hull plating seams, hazard details, drill rings & engine vents
+    if (cameraZoom >= 1.35f) {
+        val lodAlpha = ((cameraZoom - 1.35f) / 0.35f).coerceIn(0.4f, 1f)
+        val seamColor = Color(0xFF0F172A).copy(alpha = 0.8f * lodAlpha)
+        // Dorsal hull plating lines
+        drawLine(seamColor, Offset(cx - 12.2f, cy - 11.2f), Offset(cx - 12.2f, cy + 11.2f), strokeWidth = 0.7f)
+        drawLine(seamColor, Offset(cx + 1.2f, cy - 10.6f), Offset(cx + 1.2f, cy + 10.6f), strokeWidth = 0.7f)
+        drawLine(seamColor, Offset(cx - 15.6f, cy), Offset(cx - 2.0f, cy), strokeWidth = 0.65f)
+        // Side ore pod clamp latches, bolts & rear engine vent glows
+        val ventGlow = (0.65f + 0.35f * sin(time * 8f)) * lodAlpha
+        for (i in 0..1) {
+            val sign = if (i == 0) -1f else 1f
+            val podTop = if (sign < 0f) cy - 17.8f else cy + 10.6f
+            // Pod latch bars & micro-bolts
+            drawLine(Color(0xFFE2E8F0).copy(alpha = 0.75f * lodAlpha), Offset(cx - 9.2f, podTop + 1.2f), Offset(cx - 9.2f, podTop + 6.0f), strokeWidth = 0.65f)
+            drawLine(Color(0xFFE2E8F0).copy(alpha = 0.75f * lodAlpha), Offset(cx + 5.2f, podTop + 1.2f), Offset(cx + 5.2f, podTop + 6.0f), strokeWidth = 0.65f)
+            drawCircle(Color(0xFFFDE68A).copy(alpha = 0.85f * lodAlpha), 0.45f, Offset(cx - 10.2f, podTop + 3.6f))
+            drawCircle(Color(0xFFFDE68A).copy(alpha = 0.85f * lodAlpha), 0.45f, Offset(cx + 6.5f, podTop + 3.6f))
+            // Emitter focus ring on each mining prong
+            drawCircle(
+                color = Color(0xFFFEF08A).copy(alpha = 0.75f * lodAlpha),
+                radius = 2.4f,
+                center = Offset(cx + 22.2f, cy + sign * 6.8f),
+                style = Stroke(width = 0.6f)
+            )
+            // Subtle warm engine vent glow inside rear thruster housings
+            drawRoundRect(
+                color = Color(0xFFFB923C).copy(alpha = 0.72f * ventGlow),
+                topLeft = Offset(cx - 18.8f, cy + sign * 7.6f - 2.1f),
+                size = Size(2.0f, 4.2f),
+                cornerRadius = CornerRadius(0.6f, 0.6f)
+            )
+        }
+        // Cockpit glass specular reflection
+        drawLine(
+            color = Color.White.copy(alpha = 0.82f * lodAlpha),
+            start = Offset(cx + 8.8f, cy - 3.0f),
+            end = Offset(cx + 9.4f, cy - 0.8f),
+            strokeWidth = 0.85f,
+            cap = StrokeCap.Round
+        )
+    }
+
+    if (hitFlash > 0.01f) {
+        drawPath(chassis, Color.White.copy(alpha = 0.65f * hitFlash))
+    }
+}
+
+// =============================================================================
+// INDUSTRIAL SHIP 2: PLASMA COLLECTOR ("Recolectora de Plasma")
+// Technical metallic gray + cyan/teal, glowing flank containment tanks, front collector dish
+// =============================================================================
+private fun DrawScope.drawPlasmaCollectorShip(
+    cx: Float,
+    cy: Float,
+    thrust: Float,
+    pulse: Float,
+    time: Float,
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true,
+    cameraZoom: Float = 1.0f
+) {
+    // Clean cyan energy thruster (primary center + twin stabilizer vents)
+    if (showThrusterFlames) {
+        drawPlasmaThrusterFlame(cx - 18.5f, cy, thrust, maxLen = 22f, halfW = 4.2f, pulse = pulse, phaseOffset = 0.5f)
+        drawPlasmaThrusterFlame(cx - 15.8f, cy - 9.2f, thrust * 0.7f, maxLen = 11f, halfW = 2.0f, pulse = pulse, phaseOffset = 1.8f)
+        drawPlasmaThrusterFlame(cx - 15.8f, cy + 9.2f, thrust * 0.7f, maxLen = 11f, halfW = 2.0f, pulse = pulse, phaseOffset = 3.1f)
+    }
+
+    val plasmaGlow = 0.72f + 0.28f * sin(time * 6.5f)
+
+    // Front curved collector dish & twin antennae prongs
+    val dish = Path().apply {
+        moveTo(cx + 13.0f, cy - 11.8f)
+        quadraticTo(cx + 22.8f, cy - 7.5f, cx + 22.8f, cy)
+        quadraticTo(cx + 22.8f, cy + 7.5f, cx + 13.0f, cy + 11.8f)
+        lineTo(cx + 11.0f, cy + 9.4f)
+        quadraticTo(cx + 18.8f, cy + 5.8f, cx + 18.8f, cy)
+        quadraticTo(cx + 18.8f, cy - 5.8f, cx + 11.0f, cy - 9.4f)
+        close()
+    }
+    drawPath(dish, Color(0xFF475569))
+    drawPath(dish, Color(0xFF22D3EE), style = Stroke(width = 1.15f, join = StrokeJoin.Round))
+
+    // Collector antennae & central focal energy orb
+    for (sign in floatArrayOf(-1f, 1f)) {
+        drawLine(
+            color = Color(0xFF94A3B8),
+            start = Offset(cx + 14.5f, cy + sign * 8.5f),
+            end = Offset(cx + 22.2f, cy + sign * 4.0f),
+            strokeWidth = 1.2f,
+            cap = StrokeCap.Round
+        )
+    }
+    drawCircle(
+        color = Color(0xFF06B6D4).copy(alpha = 0.42f * plasmaGlow),
+        radius = 4.4f,
+        center = Offset(cx + 16.5f, cy)
+    )
+    drawCircle(
+        color = Color(0xFF67E8F9),
+        radius = 2.0f,
+        center = Offset(cx + 16.5f, cy)
+    )
+    drawCircle(
+        color = Color.White,
+        radius = 0.9f,
+        center = Offset(cx + 16.5f, cy)
+    )
+
+    // Structural wing struts holding the plasma containment tanks
+    for (sign in floatArrayOf(-1f, 1f)) {
+        drawRect(
+            color = Color(0xFF334155),
+            topLeft = Offset(cx - 10.0f, if (sign < 0f) cy - 11.5f else cy + 5.5f),
+            size = Size(16.0f, 6.0f)
+        )
+    }
+
+    // Glowing cylindrical plasma containment tanks on BOTH flanks
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val tankTop = if (sign < 0f) cy - 16.6f else cy + 9.8f
+        val tankH = 6.8f
+        // Metallic tank casing
+        drawRoundRect(
+            color = Color(0xFF1E293B),
+            topLeft = Offset(cx - 13.5f, tankTop),
+            size = Size(22.5f, tankH),
+            cornerRadius = CornerRadius(3.4f, 3.4f)
+        )
+        // Glowing cyan/teal plasma core tube inside
+        drawRoundRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF0891B2),
+                    Color(0xFF22D3EE).copy(alpha = 0.92f * plasmaGlow),
+                    Color(0xFFA5F3FC).copy(alpha = plasmaGlow),
+                    Color(0xFF0891B2)
+                ),
+                startY = tankTop + 1.0f,
+                endY = tankTop + tankH - 1.0f
+            ),
+            topLeft = Offset(cx - 10.6f, tankTop + 1.1f),
+            size = Size(16.7f, tankH - 2.2f),
+            cornerRadius = CornerRadius(2.2f, 2.2f)
+        )
+        // Tank end-caps and retaining rings
+        for (rx in floatArrayOf(-10.8f, -4.5f, 1.5f, 6.4f)) {
+            drawLine(
+                color = Color(0xFFCBD5E1),
+                start = Offset(cx + rx, tankTop + 0.4f),
+                end = Offset(cx + rx, tankTop + tankH - 0.4f),
+                strokeWidth = 1.4f
+            )
+        }
+        drawRoundRect(
+            color = Color(0xFF94A3B8),
+            topLeft = Offset(cx - 13.5f, tankTop),
+            size = Size(22.5f, tankH),
+            cornerRadius = CornerRadius(3.4f, 3.4f),
+            style = Stroke(width = 0.95f)
+        )
+    }
+
+    // Sleek technical central fuselage (metallic gray + teal accents)
+    val hull = Path().apply {
+        moveTo(cx + 15.0f, cy - 3.8f)
+        lineTo(cx + 8.5f, cy - 8.2f)
+        lineTo(cx - 12.5f, cy - 7.8f)
+        lineTo(cx - 18.6f, cy - 4.5f)
+        lineTo(cx - 18.6f, cy + 4.5f)
+        lineTo(cx - 12.5f, cy + 7.8f)
+        lineTo(cx + 8.5f, cy + 8.2f)
+        lineTo(cx + 15.0f, cy + 3.8f)
+        close()
+    }
+    drawPath(
+        path = hull,
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF94A3B8), Color(0xFF64748B), Color(0xFF334155)),
+            start = Offset(cx + 14f, cy - 8f),
+            end = Offset(cx - 18f, cy + 8f)
+        )
+    )
+    drawPath(hull, Color(0xFFE2E8F0), style = Stroke(width = 1.15f, join = StrokeJoin.Round))
+
+    // Glowing teal conduit spine
+    drawLine(
+        color = Color(0xFF22D3EE),
+        start = Offset(cx - 14.5f, cy),
+        end = Offset(cx + 1.0f, cy),
+        strokeWidth = 2.0f,
+        cap = StrokeCap.Round
+    )
+
+    // Sleek elongated glass cockpit canopy
+    drawOval(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx + 1.5f, cy - 4.3f),
+        size = Size(10.5f, 8.6f)
+    )
+    drawOval(
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFFA5F3FC), Color(0xFF06B6D4), Color(0xFF164E63)),
+            start = Offset(cx + 11f, cy - 3f),
+            end = Offset(cx + 2f, cy + 3f)
+        ),
+        topLeft = Offset(cx + 2.4f, cy - 3.4f),
+        size = Size(8.7f, 6.8f)
+    )
+
+    // High-Detail LOD (cameraZoom >= 1.35f): glowing plasma bubbles, energy coils, hull seams & engine vents
+    if (cameraZoom >= 1.35f) {
+        val lodAlpha = ((cameraZoom - 1.35f) / 0.35f).coerceIn(0.4f, 1f)
+        val seamColor = Color(0xFF0F172A).copy(alpha = 0.72f * lodAlpha)
+        // Central fuselage plating seams
+        drawLine(seamColor, Offset(cx - 5.5f, cy - 7.4f), Offset(cx - 5.5f, cy + 7.4f), strokeWidth = 0.65f)
+        drawLine(seamColor, Offset(cx - 12.2f, cy - 6.8f), Offset(cx - 12.2f, cy + 6.8f), strokeWidth = 0.65f)
+        // Animated glowing plasma bubbles & helical coil ticks inside BOTH flank containment tanks
+        val bubbleShift = (time * 5.2f) % 14.0f
+        for (i in 0..1) {
+            val sign = if (i == 0) -1f else 1f
+            val tankCenterY = if (sign < 0f) cy - 13.2f else cy + 13.2f
+            for (b in 0..2) {
+                val bx = cx - 9.4f + ((bubbleShift + b * 4.8f) % 14.0f)
+                val by = tankCenterY + sin(time * 4.5f + b * 2.1f + sign) * 1.1f
+                drawCircle(
+                    color = Color(0xFFE0F2FE).copy(alpha = 0.88f * lodAlpha),
+                    radius = 0.85f,
+                    center = Offset(bx, by)
+                )
+            }
+            // Energy coil micro-bars along tank core
+            for (c in 0..3) {
+                val coilX = cx - 8.2f + c * 4.2f
+                drawLine(
+                    color = Color(0xFF67E8F9).copy(alpha = 0.78f * lodAlpha),
+                    start = Offset(coilX, tankCenterY - 1.8f),
+                    end = Offset(coilX + 1.1f, tankCenterY + 1.8f),
+                    strokeWidth = 0.6f
+                )
+            }
+            // Subtle cyan stabilizer vent glow
+            drawCircle(
+                color = Color(0xFF22D3EE).copy(alpha = 0.75f * lodAlpha),
+                radius = 1.1f,
+                center = Offset(cx - 15.2f, cy + sign * 9.2f)
+            )
+        }
+        // Collector focal orb concentric ring + cockpit glass glare arc
+        drawCircle(
+            color = Color(0xFFA5F3FC).copy(alpha = 0.68f * lodAlpha),
+            radius = 3.2f,
+            center = Offset(cx + 16.5f, cy),
+            style = Stroke(width = 0.55f)
+        )
+        drawArc(
+            color = Color.White.copy(alpha = 0.85f * lodAlpha),
+            startAngle = -55f,
+            sweepAngle = 70f,
+            useCenter = false,
+            topLeft = Offset(cx + 3.2f, cy - 2.6f),
+            size = Size(7.0f, 5.2f),
+            style = Stroke(width = 0.75f, cap = StrokeCap.Round)
+        )
+        // Rear primary plasma engine vent glow
+        drawRoundRect(
+            color = Color(0xFF67E8F9).copy(alpha = 0.82f * lodAlpha),
+            topLeft = Offset(cx - 18.2f, cy - 2.4f),
+            size = Size(1.8f, 4.8f),
+            cornerRadius = CornerRadius(0.7f, 0.7f)
+        )
+    }
+
+    if (hitFlash > 0.01f) {
+        drawPath(hull, Color.White.copy(alpha = 0.65f * hitFlash))
+    }
+}
+
+// =============================================================================
+// INDUSTRIAL SHIP 3: MEDIUM HAULER ("Carguero Mediano")
+// Elongated freighter (gray + orange stripes), 4 modular cargo containers, forward bridge, twin thrusters
+// =============================================================================
+private fun DrawScope.drawMediumHaulerShip(
+    cx: Float,
+    cy: Float,
+    thrust: Float,
+    pulse: Float,
+    time: Float,
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true,
+    cameraZoom: Float = 1.0f
+) {
+    // Twin heavy rear thrusters
+    if (showThrusterFlames) {
+        drawRocketThrusterFlame(cx - 25.5f, cy - 7.8f, thrust, maxLen = 22f, halfW = 4.2f, pulse = pulse, phaseOffset = 0.4f)
+        drawRocketThrusterFlame(cx - 25.5f, cy + 7.8f, thrust, maxLen = 22f, halfW = 4.2f, pulse = pulse, phaseOffset = 2.3f)
+    }
+
+    // Rear engine block & armored nacelles
+    for (sign in floatArrayOf(-1f, 1f)) {
+        drawRoundRect(
+            color = Color(0xFF1E293B),
+            topLeft = Offset(cx - 26.2f, cy + sign * 7.8f - 4.2f),
+            size = Size(8.4f, 8.4f),
+            cornerRadius = CornerRadius(1.6f, 1.6f)
+        )
+        drawRoundRect(
+            color = Color(0xFF64748B),
+            topLeft = Offset(cx - 26.2f, cy + sign * 7.8f - 4.2f),
+            size = Size(8.4f, 8.4f),
+            cornerRadius = CornerRadius(1.6f, 1.6f),
+            style = Stroke(width = 1.0f)
+        )
+    }
+
+    // Elongated central freighter spine frame
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF475569), Color(0xFF334155), Color(0xFF1E293B)),
+            start = Offset(cx + 20f, cy - 12f),
+            end = Offset(cx - 22f, cy + 12f)
+        ),
+        topLeft = Offset(cx - 21.5f, cy - 11.2f),
+        size = Size(38.0f, 22.4f),
+        cornerRadius = CornerRadius(2.5f, 2.5f)
+    )
+    drawRoundRect(
+        color = Color(0xFF94A3B8),
+        topLeft = Offset(cx - 21.5f, cy - 11.2f),
+        size = Size(38.0f, 22.4f),
+        cornerRadius = CornerRadius(2.5f, 2.5f),
+        style = Stroke(width = 1.15f)
+    )
+
+    // 4 Modular Cargo Containers (2x2 grid along midsection)
+    val containerCols = floatArrayOf(cx - 17.0f, cx - 2.2f)
+    val containerRows = floatArrayOf(cy - 15.2f, cy + 3.2f)
+    val podW = 13.0f
+    val podH = 12.0f
+    for (px in containerCols) {
+        for (py in containerRows) {
+            drawRoundRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF64748B), Color(0xFF334155)),
+                    start = Offset(px, py),
+                    end = Offset(px + podW, py + podH)
+                ),
+                topLeft = Offset(px, py),
+                size = Size(podW, podH),
+                cornerRadius = CornerRadius(1.8f, 1.8f)
+            )
+            // Industrial orange cargo stripe
+            drawRect(
+                color = Color(0xFFF97316),
+                topLeft = Offset(px + 1.4f, py + podH * 0.5f - 1.5f),
+                size = Size(podW - 2.8f, 3.0f)
+            )
+            // Container structural ribs
+            drawLine(
+                color = Color(0xFF1E293B),
+                start = Offset(px + podW * 0.34f, py + 0.8f),
+                end = Offset(px + podW * 0.34f, py + podH - 0.8f),
+                strokeWidth = 0.9f
+            )
+            drawLine(
+                color = Color(0xFF1E293B),
+                start = Offset(px + podW * 0.67f, py + 0.8f),
+                end = Offset(px + podW * 0.67f, py + podH - 0.8f),
+                strokeWidth = 0.9f
+            )
+            drawRoundRect(
+                color = Color(0xFFCBD5E1),
+                topLeft = Offset(px, py),
+                size = Size(podW, podH),
+                cornerRadius = CornerRadius(1.8f, 1.8f),
+                style = Stroke(width = 0.95f)
+            )
+        }
+    }
+
+    // Central dorsal walkway spine & orange trim
+    drawRect(
+        color = Color(0xFF1E293B),
+        topLeft = Offset(cx - 20.0f, cy - 2.4f),
+        size = Size(34.5f, 4.8f)
+    )
+    drawLine(
+        color = Color(0xFFFB923C),
+        start = Offset(cx - 18.5f, cy),
+        end = Offset(cx + 12.5f, cy),
+        strokeWidth = 1.4f
+    )
+
+    // Forward armored command bridge
+    val bridge = Path().apply {
+        moveTo(cx + 25.5f, cy - 6.8f)
+        lineTo(cx + 22.0f, cy - 11.4f)
+        lineTo(cx + 12.2f, cy - 12.2f)
+        lineTo(cx + 12.2f, cy + 12.2f)
+        lineTo(cx + 22.0f, cy + 11.4f)
+        lineTo(cx + 25.5f, cy + 6.8f)
+        close()
+    }
+    drawPath(
+        path = bridge,
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF94A3B8), Color(0xFF475569), Color(0xFF1E293B)),
+            start = Offset(cx + 25f, cy - 10f),
+            end = Offset(cx + 12f, cy + 10f)
+        )
+    )
+    drawPath(bridge, Color(0xFFE2E8F0), style = Stroke(width = 1.25f, join = StrokeJoin.Round))
+
+    // Orange bow trim bands
+    for (sign in floatArrayOf(-1f, 1f)) {
+        drawLine(
+            color = Color(0xFFF97316),
+            start = Offset(cx + 14.2f, cy + sign * 9.5f),
+            end = Offset(cx + 21.8f, cy + sign * 8.6f),
+            strokeWidth = 2.0f,
+            cap = StrokeCap.Round
+        )
+    }
+
+    // Wide armored bridge visor slit
+    drawRoundRect(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx + 18.0f, cy - 6.5f),
+        size = Size(5.2f, 13.0f),
+        cornerRadius = CornerRadius(1.8f, 1.8f)
+    )
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(Color(0xFF0284C7), Color(0xFF7DD3FC), Color(0xFF0284C7)),
+            startY = cy - 5.4f,
+            endY = cy + 5.4f
+        ),
+        topLeft = Offset(cx + 19.0f, cy - 5.4f),
+        size = Size(3.3f, 10.8f),
+        cornerRadius = CornerRadius(1.2f, 1.2f)
+    )
+
+    // High-Detail LOD (cameraZoom >= 1.35f): cargo container latches/straps, hull plating seams & engine vents
+    if (cameraZoom >= 1.35f) {
+        val lodAlpha = ((cameraZoom - 1.35f) / 0.35f).coerceIn(0.4f, 1f)
+        val latchColor = Color(0xFFE2E8F0).copy(alpha = 0.85f * lodAlpha)
+        val strapColor = Color(0xFF0F172A).copy(alpha = 0.82f * lodAlpha)
+        // Cargo latches & securing straps on all 4 modular containers
+        for (c in 0..1) {
+            val px = if (c == 0) cx - 17.0f else cx - 2.2f
+            for (r in 0..1) {
+                val py = if (r == 0) cy - 15.2f else cy + 3.2f
+                // Horizontal tie-down straps flanking the orange cargo band
+                drawLine(strapColor, Offset(px + 0.8f, py + 3.0f), Offset(px + podW - 0.8f, py + 3.0f), strokeWidth = 0.55f)
+                drawLine(strapColor, Offset(px + 0.8f, py + podH - 3.0f), Offset(px + podW - 0.8f, py + podH - 3.0f), strokeWidth = 0.55f)
+                // 4 corner latch clamps per container
+                drawCircle(latchColor, 0.5f, Offset(px + 1.8f, py + 1.7f))
+                drawCircle(latchColor, 0.5f, Offset(px + podW - 1.8f, py + 1.7f))
+                drawCircle(latchColor, 0.5f, Offset(px + 1.8f, py + podH - 1.7f))
+                drawCircle(latchColor, 0.5f, Offset(px + podW - 1.8f, py + podH - 1.7f))
+            }
+        }
+        // Bridge armor seam lines, visor glare & twin engine vent glows
+        drawLine(strapColor, Offset(cx + 15.6f, cy - 11.4f), Offset(cx + 15.6f, cy + 11.4f), strokeWidth = 0.7f)
+        drawLine(
+            color = Color.White.copy(alpha = 0.82f * lodAlpha),
+            start = Offset(cx + 21.1f, cy - 4.2f),
+            end = Offset(cx + 21.1f, cy + 1.6f),
+            strokeWidth = 0.75f,
+            cap = StrokeCap.Round
+        )
+        val ventGlow = (0.68f + 0.32f * sin(time * 7.5f)) * lodAlpha
+        for (i in 0..1) {
+            val sign = if (i == 0) -1f else 1f
+            drawRoundRect(
+                color = Color(0xFFFB923C).copy(alpha = 0.75f * ventGlow),
+                topLeft = Offset(cx - 25.4f, cy + sign * 7.8f - 2.4f),
+                size = Size(2.2f, 4.8f),
+                cornerRadius = CornerRadius(0.6f, 0.6f)
+            )
+        }
+    }
+
+    if (hitFlash > 0.01f) {
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.62f * hitFlash),
+            topLeft = Offset(cx - 21.5f, cy - 15.2f),
+            size = Size(47.0f, 30.4f),
+            cornerRadius = CornerRadius(4f, 4f)
+        )
+    }
+}
+
+// =============================================================================
+// INDUSTRIAL SHIP 4: HEAVY HAULER ("Carguero Pesado / Mamut")
+// Massive bulk freighter (heavy dark iron + gold/amber hazard stripes), 8 cargo bays, quad thrusters
+// =============================================================================
+private fun DrawScope.drawHeavyHaulerShip(
+    cx: Float,
+    cy: Float,
+    thrust: Float,
+    pulse: Float,
+    time: Float,
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true,
+    cameraZoom: Float = 1.0f
+) {
+    // Quad heavy rear thrusters
+    if (showThrusterFlames) {
+        drawRocketThrusterFlame(cx - 30.2f, cy - 16.5f, thrust, maxLen = 22f, halfW = 4.0f, pulse = pulse, phaseOffset = 0.2f)
+        drawRocketThrusterFlame(cx - 31.2f, cy - 6.2f, thrust, maxLen = 26f, halfW = 4.6f, pulse = pulse, phaseOffset = 1.4f)
+        drawRocketThrusterFlame(cx - 31.2f, cy + 6.2f, thrust, maxLen = 26f, halfW = 4.6f, pulse = pulse, phaseOffset = 2.7f)
+        drawRocketThrusterFlame(cx - 30.2f, cy + 16.5f, thrust, maxLen = 22f, halfW = 4.0f, pulse = pulse, phaseOffset = 3.9f)
+    }
+
+    // Massive armored stern bulkhead + 4 engine nacelles
+    drawRoundRect(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx - 31.2f, cy - 21.5f),
+        size = Size(10.5f, 43.0f),
+        cornerRadius = CornerRadius(2.4f, 2.4f)
+    )
+    drawRoundRect(
+        color = Color(0xFF64748B),
+        topLeft = Offset(cx - 31.2f, cy - 21.5f),
+        size = Size(10.5f, 43.0f),
+        cornerRadius = CornerRadius(2.4f, 2.4f),
+        style = Stroke(width = 1.2f)
+    )
+
+    // Wide heavy dark-iron bulk frame & side armor rails
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF334155), Color(0xFF1E293B), Color(0xFF0F172A)),
+            start = Offset(cx + 26f, cy - 23f),
+            end = Offset(cx - 28f, cy + 23f)
+        ),
+        topLeft = Offset(cx - 25.5f, cy - 23.5f),
+        size = Size(48.0f, 47.0f),
+        cornerRadius = CornerRadius(3.5f, 3.5f)
+    )
+    drawRoundRect(
+        color = Color(0xFF64748B),
+        topLeft = Offset(cx - 25.5f, cy - 23.5f),
+        size = Size(48.0f, 47.0f),
+        cornerRadius = CornerRadius(3.5f, 3.5f),
+        style = Stroke(width = 1.4f)
+    )
+
+    // Gold/amber industrial hazard rails along top & bottom flanks
+    for (sign in floatArrayOf(-1f, 1f)) {
+        val railY = if (sign < 0f) cy - 23.0f else cy + 19.6f
+        drawRect(
+            color = Color(0xFFF59E0B),
+            topLeft = Offset(cx - 22.0f, railY),
+            size = Size(40.0f, 3.4f)
+        )
+        // Dark hazard stripes
+        var hx = cx - 20.5f
+        while (hx < cx + 16.5f) {
+            drawLine(
+                color = Color(0xFF0F172A),
+                start = Offset(hx, railY),
+                end = Offset(hx + 2.6f, railY + 3.4f),
+                strokeWidth = 2.0f
+            )
+            hx += 5.4f
+        }
+    }
+
+    // 8 MASSIVE MODULAR CARGO BAYS (4 columns x 2 flanks along central spine)
+    val bayCols = floatArrayOf(cx - 22.8f, cx - 12.6f, cx - 2.4f, cx + 7.8f)
+    val bayRows = floatArrayOf(cy - 18.4f, cy + 4.8f)
+    val bayW = 8.8f
+    val bayH = 13.6f
+    for (bx in bayCols) {
+        for (by in bayRows) {
+            drawRoundRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF475569), Color(0xFF1E293B)),
+                    start = Offset(bx, by),
+                    end = Offset(bx + bayW, by + bayH)
+                ),
+                topLeft = Offset(bx, by),
+                size = Size(bayW, bayH),
+                cornerRadius = CornerRadius(1.6f, 1.6f)
+            )
+            // Gold-amber cargo lock stripe
+            drawRect(
+                color = Color(0xFFD97706),
+                topLeft = Offset(bx + 1.2f, by + bayH * 0.5f - 1.3f),
+                size = Size(bayW - 2.4f, 2.6f)
+            )
+            // Heavy vertical cargo rib
+            drawLine(
+                color = Color(0xFF0F172A),
+                start = Offset(bx + bayW * 0.5f, by + 0.8f),
+                end = Offset(bx + bayW * 0.5f, by + bayH - 0.8f),
+                strokeWidth = 1.0f
+            )
+            drawRoundRect(
+                color = Color(0xFF94A3B8),
+                topLeft = Offset(bx, by),
+                size = Size(bayW, bayH),
+                cornerRadius = CornerRadius(1.6f, 1.6f),
+                style = Stroke(width = 0.9f)
+            )
+        }
+    }
+
+    // Reinforced central structural spine
+    drawRect(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx - 24.5f, cy - 3.6f),
+        size = Size(44.0f, 7.2f)
+    )
+    drawRect(
+        color = Color(0xFF475569),
+        topLeft = Offset(cx - 23.5f, cy - 2.2f),
+        size = Size(42.0f, 4.4f)
+    )
+    drawLine(
+        color = Color(0xFFFBBF24),
+        start = Offset(cx - 22.0f, cy),
+        end = Offset(cx + 16.5f, cy),
+        strokeWidth = 1.4f
+    )
+
+    // Reinforced wide armored prow / Mamut command superstructure
+    val prow = Path().apply {
+        moveTo(cx + 31.5f, cy - 10.5f)
+        lineTo(cx + 26.5f, cy - 20.8f)
+        lineTo(cx + 17.8f, cy - 22.5f)
+        lineTo(cx + 17.8f, cy + 22.5f)
+        lineTo(cx + 26.5f, cy + 20.8f)
+        lineTo(cx + 31.5f, cy + 10.5f)
+        close()
+    }
+    drawPath(
+        path = prow,
+        brush = Brush.linearGradient(
+            colors = listOf(Color(0xFF64748B), Color(0xFF334155), Color(0xFF1E293B)),
+            start = Offset(cx + 31f, cy - 18f),
+            end = Offset(cx + 18f, cy + 18f)
+        )
+    )
+    drawPath(prow, Color(0xFFCBD5E1), style = Stroke(width = 1.45f, join = StrokeJoin.Round))
+
+    // Gold/amber bow bumper plates & running beacons
+    val beaconPulse = 0.65f + 0.35f * sin(time * 5.0f)
+    for (sign in floatArrayOf(-1f, 1f)) {
+        drawLine(
+            color = Color(0xFFF59E0B),
+            start = Offset(cx + 25.8f, cy + sign * 18.2f),
+            end = Offset(cx + 30.2f, cy + sign * 9.8f),
+            strokeWidth = 2.4f,
+            cap = StrokeCap.Round
+        )
+        drawCircle(
+            color = Color(0xFFFDE68A).copy(alpha = beaconPulse),
+            radius = 2.0f,
+            center = Offset(cx + 28.4f, cy + sign * 14.5f)
+        )
+    }
+
+    // Armored capital bridge visor
+    drawRoundRect(
+        color = Color(0xFF0F172A),
+        topLeft = Offset(cx + 21.8f, cy - 8.8f),
+        size = Size(5.6f, 17.6f),
+        cornerRadius = CornerRadius(2.0f, 2.0f)
+    )
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(Color(0xFFD97706), Color(0xFFFEF08A), Color(0xFFD97706)),
+            startY = cy - 7.5f,
+            endY = cy + 7.5f
+        ),
+        topLeft = Offset(cx + 22.9f, cy - 7.5f),
+        size = Size(3.4f, 15.0f),
+        cornerRadius = CornerRadius(1.2f, 1.2f)
+    )
+
+    // High-Detail LOD (cameraZoom >= 1.35f): 8 cargo bay latches/straps, prow seams & quad engine vent glows
+    if (cameraZoom >= 1.35f) {
+        val lodAlpha = ((cameraZoom - 1.35f) / 0.35f).coerceIn(0.4f, 1f)
+        val strapColor = Color(0xFF0F172A).copy(alpha = 0.85f * lodAlpha)
+        val latchColor = Color(0xFFFDE68A).copy(alpha = 0.86f * lodAlpha)
+        // Cargo latches & securing cross-straps on all 8 modular bays
+        for (c in 0..3) {
+            val bx = cx - 22.8f + c * 10.2f
+            for (r in 0..1) {
+                val by = if (r == 0) cy - 18.4f else cy + 4.8f
+                drawLine(strapColor, Offset(bx + 0.8f, by + 3.4f), Offset(bx + bayW - 0.8f, by + 3.4f), strokeWidth = 0.55f)
+                drawLine(strapColor, Offset(bx + 0.8f, by + bayH - 3.4f), Offset(bx + bayW - 0.8f, by + bayH - 3.4f), strokeWidth = 0.55f)
+                drawCircle(latchColor, 0.48f, Offset(bx + 1.6f, by + 1.7f))
+                drawCircle(latchColor, 0.48f, Offset(bx + bayW - 1.6f, by + 1.7f))
+                drawCircle(latchColor, 0.48f, Offset(bx + 1.6f, by + bayH - 1.7f))
+                drawCircle(latchColor, 0.48f, Offset(bx + bayW - 1.6f, by + bayH - 1.7f))
+            }
+        }
+        // Central spine bulkhead ribs & prow plating seam + bridge glare
+        for (s in 0..4) {
+            val sx = cx - 20.5f + s * 9.0f
+            drawLine(strapColor, Offset(sx, cy - 3.2f), Offset(sx, cy + 3.2f), strokeWidth = 0.65f)
+        }
+        drawLine(strapColor, Offset(cx + 20.2f, cy - 21.0f), Offset(cx + 20.2f, cy + 21.0f), strokeWidth = 0.75f)
+        drawLine(
+            color = Color.White.copy(alpha = 0.82f * lodAlpha),
+            start = Offset(cx + 25.0f, cy - 5.6f),
+            end = Offset(cx + 25.0f, cy + 2.2f),
+            strokeWidth = 0.8f,
+            cap = StrokeCap.Round
+        )
+        // Subtle quad engine vent glows inside stern bulkhead
+        val ventGlow = (0.68f + 0.32f * sin(time * 6.5f)) * lodAlpha
+        val ventColor = Color(0xFFF59E0B).copy(alpha = 0.78f * ventGlow)
+        drawRoundRect(ventColor, Offset(cx - 30.2f, cy - 18.5f), Size(2.2f, 4.0f), CornerRadius(0.6f, 0.6f))
+        drawRoundRect(ventColor, Offset(cx - 30.4f, cy - 8.4f), Size(2.4f, 4.4f), CornerRadius(0.6f, 0.6f))
+        drawRoundRect(ventColor, Offset(cx - 30.4f, cy + 4.0f), Size(2.4f, 4.4f), CornerRadius(0.6f, 0.6f))
+        drawRoundRect(ventColor, Offset(cx - 30.2f, cy + 14.5f), Size(2.2f, 4.0f), CornerRadius(0.6f, 0.6f))
+    }
+
+    if (hitFlash > 0.01f) {
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.6f * hitFlash),
+            topLeft = Offset(cx - 25.5f, cy - 23.5f),
+            size = Size(57.0f, 47.0f),
+            cornerRadius = CornerRadius(5f, 5f)
+        )
+    }
+}
+
+private fun DrawScope.drawRocketThrusterFlame(
+    baseX: Float,
+    baseY: Float,
+    thrust: Float,
+    maxLen: Float,
+    halfW: Float,
+    pulse: Float,
+    phaseOffset: Float,
+    outerColor: Color = Color(0xFFF97316),
+    midColor: Color = Color(0xFFFACC15)
+) {
+    val flicker = 0.84f + 0.14f * sin(pulse * 2.2f + phaseOffset) + 0.08f * sin(pulse * 4.9f + phaseOffset * 1.6f)
+    val len = (maxLen * (0.28f + 0.85f * thrust)) * flicker
+    val w = halfW * (0.72f + 0.34f * thrust)
+
+    drawCircle(
+        color = outerColor.copy(alpha = 0.28f + 0.24f * thrust),
+        radius = w * 1.85f,
+        center = Offset(baseX - len * 0.16f, baseY)
+    )
+    val outer = Path().apply {
+        moveTo(baseX + 0.5f, baseY - w * 1.22f)
+        lineTo(baseX - len * 1.15f, baseY)
+        lineTo(baseX + 0.5f, baseY + w * 1.22f)
+        close()
+    }
+    drawPath(
+        path = outer,
+        brush = Brush.linearGradient(
+            colors = listOf(outerColor.copy(alpha = 0.78f + 0.2f * thrust), outerColor.copy(alpha = 0.08f)),
+            start = Offset(baseX, baseY),
+            end = Offset(baseX - len * 1.15f, baseY)
+        )
+    )
+    val mid = Path().apply {
+        moveTo(baseX + 0.5f, baseY - w * 0.8f)
+        lineTo(baseX - len * 0.84f, baseY)
+        lineTo(baseX + 0.5f, baseY + w * 0.8f)
+        close()
+    }
+    drawPath(
+        path = mid,
+        brush = Brush.linearGradient(
+            colors = listOf(midColor.copy(alpha = 0.96f), outerColor.copy(alpha = 0.45f)),
+            start = Offset(baseX, baseY),
+            end = Offset(baseX - len * 0.84f, baseY)
+        )
+    )
+    val core = Path().apply {
+        moveTo(baseX + 0.8f, baseY - w * 0.42f)
+        lineTo(baseX - len * 0.5f, baseY)
+        lineTo(baseX + 0.8f, baseY + w * 0.42f)
+        close()
+    }
+    drawPath(path = core, color = Color.White.copy(alpha = 0.88f + 0.12f * thrust))
+}
+
 private fun DrawScope.drawInterceptorShip(
     cx: Float,
     cy: Float,
     thrust: Float,
     pulse: Float,
     time: Float,
-    hitFlash: Float
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true
 ) {
     // 2 rear thrusters (Vengeance / Pusat twin-engine bank)
-    drawPlasmaThrusterFlame(cx - 14.5f, cy - 5.8f, thrust, maxLen = 24f, halfW = 3.8f, pulse = pulse, phaseOffset = 0.0f)
-    drawPlasmaThrusterFlame(cx - 14.5f, cy + 5.8f, thrust, maxLen = 24f, halfW = 3.8f, pulse = pulse, phaseOffset = 1.9f)
+    if (showThrusterFlames) {
+        drawPlasmaThrusterFlame(cx - 14.5f, cy - 5.8f, thrust, maxLen = 24f, halfW = 3.8f, pulse = pulse, phaseOffset = 0.0f)
+        drawPlasmaThrusterFlame(cx - 14.5f, cy + 5.8f, thrust, maxLen = 24f, halfW = 3.8f, pulse = pulse, phaseOffset = 1.9f)
+    }
 
     // Twin armored exhaust nozzles
     for (sign in floatArrayOf(-1f, 1f)) {
@@ -2198,13 +3843,16 @@ private fun DrawScope.drawTankCitadelShip(
     thrust: Float,
     pulse: Float,
     time: Float,
-    hitFlash: Float
+    hitFlash: Float,
+    showThrusterFlames: Boolean = true
 ) {
     // 4 heavy rear thrusters (Citadel quad capital-ship engine bank)
-    drawPlasmaThrusterFlame(cx - 24.5f, cy - 15.2f, thrust, maxLen = 20f, halfW = 3.8f, pulse = pulse, phaseOffset = 0.4f)
-    drawPlasmaThrusterFlame(cx - 26.5f, cy - 6.0f, thrust, maxLen = 24f, halfW = 4.5f, pulse = pulse, phaseOffset = 1.6f)
-    drawPlasmaThrusterFlame(cx - 26.5f, cy + 6.0f, thrust, maxLen = 24f, halfW = 4.5f, pulse = pulse, phaseOffset = 2.9f)
-    drawPlasmaThrusterFlame(cx - 24.5f, cy + 15.2f, thrust, maxLen = 20f, halfW = 3.8f, pulse = pulse, phaseOffset = 4.1f)
+    if (showThrusterFlames) {
+        drawPlasmaThrusterFlame(cx - 24.5f, cy - 15.2f, thrust, maxLen = 20f, halfW = 3.8f, pulse = pulse, phaseOffset = 0.4f)
+        drawPlasmaThrusterFlame(cx - 26.5f, cy - 6.0f, thrust, maxLen = 24f, halfW = 4.5f, pulse = pulse, phaseOffset = 1.6f)
+        drawPlasmaThrusterFlame(cx - 26.5f, cy + 6.0f, thrust, maxLen = 24f, halfW = 4.5f, pulse = pulse, phaseOffset = 2.9f)
+        drawPlasmaThrusterFlame(cx - 24.5f, cy + 15.2f, thrust, maxLen = 20f, halfW = 3.8f, pulse = pulse, phaseOffset = 4.1f)
+    }
 
     // Heavy armored thruster shrouds (4 units)
     val thrusterCoords = arrayOf(
@@ -2423,7 +4071,7 @@ private fun DrawScope.drawOrbitingVants(engine: SpaceGameEngine) {
 
     // Subtle formation aura ring for RING formation only (WHEEL draws drones only, no extra rings)
     if (formation == DroneFormation.RING) {
-        val ringR = player.shipClass.hullRadius + 20f
+        val ringR = player.hullRadius + 20f
         drawCircle(
             color = formAccent.copy(alpha = 0.16f),
             radius = ringR,

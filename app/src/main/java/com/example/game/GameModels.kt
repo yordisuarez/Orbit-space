@@ -103,12 +103,208 @@ object GameConfig {
     }
 }
 
+enum class ShipRole {
+    CAPSULE,
+    INDUSTRIAL,
+    COMBAT
+}
+
+enum class IndustrialType(
+    val solidTimeMult: Float,
+    val plasmaTimeMult: Float
+) {
+    MINER(solidTimeMult = 1.0f, plasmaTimeMult = 2.0f),
+    PLASMA_COLLECTOR(solidTimeMult = 2.0f, plasmaTimeMult = 1.0f),
+    MEDIUM_HAULER(solidTimeMult = 3.0f, plasmaTimeMult = 3.0f),
+    HEAVY_HAULER(solidTimeMult = 5.0f, plasmaTimeMult = 5.0f);
+
+    fun extractionTimeMultiplier(category: ResourceCategory): Float = when (category) {
+        ResourceCategory.SOLID -> solidTimeMult
+        ResourceCategory.PLASMA -> plasmaTimeMult
+        ResourceCategory.SALVAGE -> 1.0f
+    }
+}
+
+enum class CraftQuality(
+    val bonusPct: Float,
+    val accentHex: Long
+) {
+    STANDARD(bonusPct = 0.0f, accentHex = 0xFFE2E8F0),
+    REINFORCED(bonusPct = 0.05f, accentHex = 0xFF4ADE80),
+    EXCELLENT(bonusPct = 0.10f, accentHex = 0xFFA855F7),
+    MASTERWORK(bonusPct = 0.15f, accentHex = 0xFFFACC15);
+
+    val statMultiplier: Float get() = 1.0f + bonusPct
+
+    fun applyBonus(baseValue: Float): Float = baseValue * statMultiplier
+
+    fun applyBonusInt(baseValue: Int): Int = Math.round(baseValue * statMultiplier)
+}
+
+const val PILOT_SKILL_MIN_LEVEL = 1
+const val PILOT_SKILL_MAX_LEVEL = 99
+
+enum class SkillType {
+    MINING,
+    SALVAGING,
+    REFINING,
+    NAVAL_ENGINEERING,
+    GEAR_MANUFACTURING,
+    SYNTHESIS,
+    WEAPONRY,
+    SHIELDS,
+    PILOTING
+}
+
+/**
+ * 4-tier exponential XP curve for Pilot Skills (Lv 1–99):
+ * - Lv 1–33: Easy
+ * - Lv 34–66: Medium
+ * - Lv 67–89: Hard
+ * - Lv 90–99: Very Hard (returns 0L at max Lv 99)
+ */
+fun xpRequiredForNextLevel(level: Int): Long {
+    if (level >= PILOT_SKILL_MAX_LEVEL) return 0L
+    val lv = level.coerceAtLeast(PILOT_SKILL_MIN_LEVEL)
+    val t1End = 100.0 * Math.pow(1.06, 32.0)       // Lv 33 anchor (~645)
+    val t2End = t1End * Math.pow(1.085, 33.0)      // Lv 66 anchor (~9,528)
+    val t3End = t2End * Math.pow(1.12, 23.0)       // Lv 89 anchor (~129,144)
+
+    val raw = when {
+        lv <= 33 -> 100.0 * Math.pow(1.06, (lv - 1).toDouble())
+        lv <= 66 -> t1End * Math.pow(1.085, (lv - 33).toDouble())
+        lv <= 89 -> t2End * Math.pow(1.12, (lv - 66).toDouble())
+        else -> t3End * Math.pow(1.22, (lv - 89).toDouble())
+    }
+    return Math.round(raw).coerceAtLeast(100L)
+}
+
+/**
+ * Piecewise linear extraction time per charge based on pilot skill level:
+ * Lv 1 -> 3.0s, Lv 33 -> 2.0s, Lv 66 -> 1.0s, Lv 99 -> 0.1s (clamped at 0.1s).
+ */
+fun baseExtractionSeconds(skillLevel: Int): Float {
+    val lv = skillLevel.coerceIn(PILOT_SKILL_MIN_LEVEL, PILOT_SKILL_MAX_LEVEL)
+    val seconds = when {
+        lv <= 33 -> 3.0f - ((lv - 1) / 32.0f) * 1.0f
+        lv <= 66 -> 2.0f - ((lv - 33) / 33.0f) * 1.0f
+        else -> 1.0f - ((lv - 66) / 33.0f) * 0.9f
+    }
+    return seconds.coerceAtLeast(0.1f)
+}
+
+fun effectiveExtractionSeconds(
+    skillLevel: Int,
+    category: ResourceCategory,
+    industrialType: IndustrialType?
+): Float {
+    val base = baseExtractionSeconds(skillLevel)
+    val mult = industrialType?.extractionTimeMultiplier(category) ?: 1.0f
+    return (base * mult).coerceAtLeast(0.1f)
+}
+
+/**
+ * Smoothly scales Credit refining fee discount from 0% at Lv 1 up to 35% at Lv 99.
+ */
+fun refiningFeeDiscountPct(refiningLevel: Int): Float {
+    val lv = refiningLevel.coerceIn(PILOT_SKILL_MIN_LEVEL, PILOT_SKILL_MAX_LEVEL)
+    return ((lv - 1) / 98.0f) * 0.35f
+}
+
+/**
+ * Smoothly scales bonus refined output chance from 0% at Lv 1 up to 15% at Lv 99.
+ */
+fun refiningBonusOutputChance(refiningLevel: Int): Float {
+    val lv = refiningLevel.coerceIn(PILOT_SKILL_MIN_LEVEL, PILOT_SKILL_MAX_LEVEL)
+    return ((lv - 1) / 98.0f) * 0.15f
+}
+
+fun baseRefiningFeePerUnit(resource: ResourceType): Int = when {
+    resource.isYellowCrystal -> 240
+    resource == ResourceType.XENO_SALVAGE -> 80
+    resource.category == ResourceCategory.PLASMA -> 40
+    else -> 20
+}
+
+fun effectiveRefiningFeePerUnit(resource: ResourceType, refiningLevel: Int): Int {
+    val base = baseRefiningFeePerUnit(resource)
+    val discount = refiningFeeDiscountPct(refiningLevel)
+    return Math.round(base * (1.0f - discount)).coerceAtLeast(1)
+}
+
+fun refiningXpPerUnit(resource: ResourceType): Long = when {
+    resource.isYellowCrystal -> 140L
+    resource == ResourceType.XENO_SALVAGE -> 68L
+    resource.category == ResourceCategory.PLASMA -> 42L
+    else -> 25L
+}
+
+data class SkillProgress(
+    val level: Int = PILOT_SKILL_MIN_LEVEL,
+    val xp: Long = 0L
+) {
+    val xpToNextLevel: Long get() = xpRequiredForNextLevel(level)
+
+    val isMaxLevel: Boolean get() = level >= PILOT_SKILL_MAX_LEVEL
+
+    val progressFraction: Float
+        get() {
+            val req = xpToNextLevel
+            if (req <= 0L) return 1f
+            return (xp.toFloat() / req.toFloat()).coerceIn(0f, 1f)
+        }
+
+    fun addXp(gainedXp: Long): SkillProgress {
+        if (gainedXp <= 0L || isMaxLevel) return this
+        var currentLevel = level.coerceIn(PILOT_SKILL_MIN_LEVEL, PILOT_SKILL_MAX_LEVEL)
+        var currentXp = (xp + gainedXp).coerceAtLeast(0L)
+        while (currentLevel < PILOT_SKILL_MAX_LEVEL) {
+            val needed = xpRequiredForNextLevel(currentLevel)
+            if (needed <= 0L || currentXp < needed) break
+            currentXp -= needed
+            currentLevel++
+        }
+        if (currentLevel >= PILOT_SKILL_MAX_LEVEL) {
+            currentLevel = PILOT_SKILL_MAX_LEVEL
+            currentXp = 0L
+        }
+        return SkillProgress(level = currentLevel, xp = currentXp)
+    }
+}
+
+fun defaultPilotSkills(): Map<SkillType, SkillProgress> =
+    SkillType.entries.associateWith { SkillProgress() }
+
+/**
+ * Persistent Pilot / Capsule profile storing all 9 Pilot Skills (Lv 1–99).
+ */
+data class PilotProfile(
+    val pilotName: String? = null,
+    val company: PilotCompany? = null,
+    val skills: Map<SkillType, SkillProgress> = defaultPilotSkills()
+) {
+    fun progressOf(skill: SkillType): SkillProgress = skills[skill] ?: SkillProgress()
+
+    fun levelOf(skill: SkillType): Int = progressOf(skill).level
+
+    fun withSkillXp(skill: SkillType, gainedXp: Long): PilotProfile {
+        val updated = skills.toMutableMap()
+        updated[skill] = progressOf(skill).addXp(gainedXp)
+        return copy(skills = updated)
+    }
+}
+
 enum class ShipClass(
     val displayName: String,
     val roleLabel: String,
+    val role: ShipRole,
+    val industrialType: IndustrialType? = null,
+    val tier: Int,
     val cost: Int,
     val speed: Float,
     val baseHull: Float,
+    val baseShield: Float,
+    val baseCargo: Int,
     val laserSlotCount: Int,
     val shieldSlotCount: Int,
     val hullRadius: Float,
@@ -117,22 +313,32 @@ enum class ShipClass(
 ) {
     INTERCEPTOR(
         displayName = "Interceptor",
-        roleLabel = "STARTER • FAST",
+        roleLabel = "COMBAT T1 • FAST",
+        role = ShipRole.COMBAT,
+        industrialType = null,
+        tier = 1,
         cost = 0,
         speed = 340f,
         baseHull = 140f,
-        laserSlotCount = 4,
-        shieldSlotCount = 3,
+        baseShield = 100f,
+        baseCargo = 80,
+        laserSlotCount = 6,
+        shieldSlotCount = 4,
         hullRadius = 20f,
         primaryColorHex = 0xFF1E293B,
         accentColorHex = 0xFF00E5FF
     ),
     BATTLECRUISER(
         displayName = "Battlecruiser",
-        roleLabel = "BALANCED",
+        roleLabel = "COMBAT T2 • BALANCED",
+        role = ShipRole.COMBAT,
+        industrialType = null,
+        tier = 2,
         cost = 1500,
         speed = 265f,
         baseHull = 260f,
+        baseShield = 220f,
+        baseCargo = 160,
         laserSlotCount = 6,
         shieldSlotCount = 6,
         hullRadius = 24f,
@@ -141,17 +347,344 @@ enum class ShipClass(
     ),
     DREADNOUGHT(
         displayName = "Dreadnought",
-        roleLabel = "HEAVY TANK",
+        roleLabel = "COMBAT T3 • HEAVY TANK",
+        role = ShipRole.COMBAT,
+        industrialType = null,
+        tier = 3,
         cost = 4000,
         speed = 205f,
         baseHull = 480f,
-        laserSlotCount = 8,
+        baseShield = 420f,
+        baseCargo = 280,
+        laserSlotCount = 6,
         shieldSlotCount = 10,
         hullRadius = 29f,
         primaryColorHex = 0xFF064E3B,
         accentColorHex = 0xFF34D399
+    );
+
+    fun effectiveHull(quality: CraftQuality = CraftQuality.STANDARD): Float =
+        quality.applyBonus(baseHull)
+
+    fun effectiveShield(quality: CraftQuality = CraftQuality.STANDARD): Float =
+        quality.applyBonus(baseShield)
+
+    fun effectiveCargo(quality: CraftQuality = CraftQuality.STANDARD): Int =
+        quality.applyBonusInt(baseCargo)
+}
+
+/**
+ * Full v1.10 ship hull blueprint definition supporting Capsule, Industrial archetypes,
+ * and tiered Combat ships. Weapon slot counts stay constant across tiers within a role,
+ * while higher tiers scale Hull HP, Shield capacity, and Cargo hold.
+ */
+data class ShipHullDefinition(
+    val id: String,
+    val displayName: String,
+    val role: ShipRole,
+    val industrialType: IndustrialType? = null,
+    val tier: Int,
+    val speed: Float,
+    val baseHull: Float,
+    val baseShield: Float,
+    val baseCargo: Int,
+    val weaponSlotCount: Int,
+    val shieldSlotCount: Int,
+    val hullRadius: Float
+) {
+    fun effectiveHull(quality: CraftQuality = CraftQuality.STANDARD): Float =
+        quality.applyBonus(baseHull)
+
+    fun effectiveShield(quality: CraftQuality = CraftQuality.STANDARD): Float =
+        quality.applyBonus(baseShield)
+
+    fun effectiveCargo(quality: CraftQuality = CraftQuality.STANDARD): Int =
+        quality.applyBonusInt(baseCargo)
+}
+
+object ShipHullCatalog {
+    val all: List<ShipHullDefinition> = listOf(
+        // Escape / Pilot Capsule (Permanent starter vessel: 25 cargo, 3 fixed permanent slots)
+        ShipHullDefinition(
+            id = "CAPSULE_T1",
+            displayName = "Pilot Capsule",
+            role = ShipRole.CAPSULE,
+            industrialType = null,
+            tier = 1,
+            speed = 310f,
+            baseHull = 90f,
+            baseShield = 40f,
+            baseCargo = 25,
+            weaponSlotCount = 1,
+            shieldSlotCount = 1,
+            hullRadius = 14f
+        ),
+        // Industrial Miners (Solid 1.0x, Plasma 2.0x; constant weapon slots across tiers)
+        ShipHullDefinition(
+            id = "MINER_T1",
+            displayName = "Prospector Mk I",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.MINER,
+            tier = 1,
+            speed = 235f,
+            baseHull = 220f,
+            baseShield = 140f,
+            baseCargo = 240,
+            weaponSlotCount = 2,
+            shieldSlotCount = 4,
+            hullRadius = 22f
+        ),
+        ShipHullDefinition(
+            id = "MINER_T2",
+            displayName = "Prospector Mk II",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.MINER,
+            tier = 2,
+            speed = 225f,
+            baseHull = 380f,
+            baseShield = 260f,
+            baseCargo = 440,
+            weaponSlotCount = 2,
+            shieldSlotCount = 6,
+            hullRadius = 24f
+        ),
+        // Industrial Plasma Collectors (Solid 2.0x, Plasma 1.0x)
+        ShipHullDefinition(
+            id = "PLASMA_COLLECTOR_T1",
+            displayName = "Siphon Mk I",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.PLASMA_COLLECTOR,
+            tier = 1,
+            speed = 245f,
+            baseHull = 200f,
+            baseShield = 180f,
+            baseCargo = 220,
+            weaponSlotCount = 2,
+            shieldSlotCount = 5,
+            hullRadius = 22f
+        ),
+        ShipHullDefinition(
+            id = "PLASMA_COLLECTOR_T2",
+            displayName = "Siphon Mk II",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.PLASMA_COLLECTOR,
+            tier = 2,
+            speed = 235f,
+            baseHull = 340f,
+            baseShield = 320f,
+            baseCargo = 420,
+            weaponSlotCount = 2,
+            shieldSlotCount = 7,
+            hullRadius = 24f
+        ),
+        // Medium Hauler (Solid 3.0x, Plasma 3.0x)
+        ShipHullDefinition(
+            id = "MEDIUM_HAULER_T1",
+            displayName = "Freighter M-1",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.MEDIUM_HAULER,
+            tier = 1,
+            speed = 200f,
+            baseHull = 360f,
+            baseShield = 240f,
+            baseCargo = 650,
+            weaponSlotCount = 2,
+            shieldSlotCount = 6,
+            hullRadius = 26f
+        ),
+        ShipHullDefinition(
+            id = "MEDIUM_HAULER_T2",
+            displayName = "Freighter M-2",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.MEDIUM_HAULER,
+            tier = 2,
+            speed = 192f,
+            baseHull = 580f,
+            baseShield = 400f,
+            baseCargo = 1100,
+            weaponSlotCount = 2,
+            shieldSlotCount = 8,
+            hullRadius = 27f
+        ),
+        // Heavy Hauler (Solid 5.0x, Plasma 5.0x)
+        ShipHullDefinition(
+            id = "HEAVY_HAULER_T1",
+            displayName = "Leviathan H-1",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.HEAVY_HAULER,
+            tier = 1,
+            speed = 165f,
+            baseHull = 620f,
+            baseShield = 440f,
+            baseCargo = 1400,
+            weaponSlotCount = 2,
+            shieldSlotCount = 8,
+            hullRadius = 31f
+        ),
+        ShipHullDefinition(
+            id = "HEAVY_HAULER_T2",
+            displayName = "Leviathan H-2",
+            role = ShipRole.INDUSTRIAL,
+            industrialType = IndustrialType.HEAVY_HAULER,
+            tier = 2,
+            speed = 158f,
+            baseHull = 980f,
+            baseShield = 720f,
+            baseCargo = 2400,
+            weaponSlotCount = 2,
+            shieldSlotCount = 10,
+            hullRadius = 33f
+        ),
+        // Combat Ships (constant 6 weapon slots across tiers; scaling HP, Shield, Cargo)
+        ShipHullDefinition(
+            id = "COMBAT_T1",
+            displayName = ShipClass.INTERCEPTOR.displayName,
+            role = ShipRole.COMBAT,
+            industrialType = null,
+            tier = 1,
+            speed = ShipClass.INTERCEPTOR.speed,
+            baseHull = ShipClass.INTERCEPTOR.baseHull,
+            baseShield = ShipClass.INTERCEPTOR.baseShield,
+            baseCargo = ShipClass.INTERCEPTOR.baseCargo,
+            weaponSlotCount = ShipClass.INTERCEPTOR.laserSlotCount,
+            shieldSlotCount = ShipClass.INTERCEPTOR.shieldSlotCount,
+            hullRadius = ShipClass.INTERCEPTOR.hullRadius
+        ),
+        ShipHullDefinition(
+            id = "COMBAT_T2",
+            displayName = ShipClass.BATTLECRUISER.displayName,
+            role = ShipRole.COMBAT,
+            industrialType = null,
+            tier = 2,
+            speed = ShipClass.BATTLECRUISER.speed,
+            baseHull = ShipClass.BATTLECRUISER.baseHull,
+            baseShield = ShipClass.BATTLECRUISER.baseShield,
+            baseCargo = ShipClass.BATTLECRUISER.baseCargo,
+            weaponSlotCount = ShipClass.BATTLECRUISER.laserSlotCount,
+            shieldSlotCount = ShipClass.BATTLECRUISER.shieldSlotCount,
+            hullRadius = ShipClass.BATTLECRUISER.hullRadius
+        ),
+        ShipHullDefinition(
+            id = "COMBAT_T3",
+            displayName = ShipClass.DREADNOUGHT.displayName,
+            role = ShipRole.COMBAT,
+            industrialType = null,
+            tier = 3,
+            speed = ShipClass.DREADNOUGHT.speed,
+            baseHull = ShipClass.DREADNOUGHT.baseHull,
+            baseShield = ShipClass.DREADNOUGHT.baseShield,
+            baseCargo = ShipClass.DREADNOUGHT.baseCargo,
+            weaponSlotCount = ShipClass.DREADNOUGHT.laserSlotCount,
+            shieldSlotCount = ShipClass.DREADNOUGHT.shieldSlotCount,
+            hullRadius = ShipClass.DREADNOUGHT.hullRadius
+        )
+    )
+
+    val capsule: ShipHullDefinition
+        get() = all.first { it.id == "CAPSULE_T1" }
+
+    fun byId(id: String): ShipHullDefinition? = all.firstOrNull { it.id == id }
+
+    fun industrialT1(type: IndustrialType): ShipHullDefinition =
+        all.first { it.role == ShipRole.INDUSTRIAL && it.industrialType == type && it.tier == 1 }
+
+    fun forCombatClass(shipClass: ShipClass): ShipHullDefinition = when (shipClass) {
+        ShipClass.INTERCEPTOR -> all.first { it.id == "COMBAT_T1" }
+        ShipClass.BATTLECRUISER -> all.first { it.id == "COMBAT_T2" }
+        ShipClass.DREADNOUGHT -> all.first { it.id == "COMBAT_T3" }
+    }
+}
+
+/**
+ * Fixed permanent loadout for the Pilot Capsule (never lost, never sold, never destroyed):
+ * 1 Basic Laser, 1 Basic Tool (Mining/Salvaging), and 1 Basic Extra/Shield.
+ */
+object CapsulePermanentConfig {
+    const val BASE_HULL = 90f
+    const val BASE_SHIELD = GameConfig.PLAYER_BASE_MAX_SHIELD
+    const val SPEED = 310f
+    const val CARGO_CAPACITY = 25
+    const val HULL_RADIUS = 14f
+    const val PERMANENT_LASER_DAMAGE = 12f // Basic Tier 1 Laser
+    const val PERMANENT_SHIELD_BONUS = 80f // Basic Tier 1 Extra/Shield
+    const val MINING_TIME_MULTIPLIER = 1.5f
+}
+
+/**
+ * NPC Basic Vendor catalog in Capital Cities (C1, C2, C3).
+ * Strictly limited to Tier 1 starter essentials so players can never get soft-locked.
+ * Ships, Tier 2+ gear, VANTs, and Nucleus boosters remain 100% player-crafted.
+ */
+enum class BasicVendorItemId(
+    val priceCredits: Int,
+    val accentHex: Long,
+    val equipmentId: EquipmentItemId? = null
+) {
+    BASIC_LASER_T1(
+        priceCredits = 120,
+        accentHex = 0xFFFF6B35,
+        equipmentId = EquipmentItemId.LF_1
+    ),
+    BASIC_TOOL_T1(
+        priceCredits = 100,
+        accentHex = 0xFF38BDF8
+    ),
+    BASIC_SHIELD_T1(
+        priceCredits = 140,
+        accentHex = 0xFF0EA5E9,
+        equipmentId = EquipmentItemId.SG_1
+    ),
+    BASIC_REPAIR_KIT(
+        priceCredits = 80,
+        accentHex = 0xFF4ADE80
     )
 }
+
+/**
+ * Lootable player Ship Wreck spawned at death coordinates containing 60% of cargo
+ * and equipped non-capsule gear (the remaining 40% is permanently destroyed).
+ */
+class PlayerShipWreck(
+    val id: Int,
+    val sectorId: String,
+    val x: Float,
+    val y: Float,
+    val shipName: String,
+    val isCapsuleWreck: Boolean,
+    val rawCargo: MutableMap<ResourceType, Int> = linkedMapOf(),
+    val refinedCargo: MutableMap<ResourceType, Int> = linkedMapOf(),
+    val droppedEquipment: MutableList<EquipmentItem> = mutableListOf(),
+    var expirationTimerSec: Float = DEFAULT_LIFETIME_SEC,
+    var beaconTimerSec: Float = 0f
+) {
+    val totalCargoUnits: Int
+        get() = rawCargo.values.sum() + refinedCargo.values.sum()
+    val totalGearItems: Int
+        get() = droppedEquipment.size
+    val isEmpty: Boolean
+        get() = totalCargoUnits <= 0 && totalGearItems <= 0
+
+    companion object {
+        const val DEFAULT_LIFETIME_SEC = 300f
+    }
+}
+
+/**
+ * Summary of the player's most recent destruction event for localized death/respawn feedback.
+ */
+data class DeathSummary(
+    val wasInCapsule: Boolean,
+    val destroyedShipName: String?,
+    val deathSectorId: String,
+    val deathX: Int,
+    val deathY: Int,
+    val cargoDroppedToWreck: Int,
+    val cargoDestroyed: Int,
+    val gearDroppedToWreck: Int,
+    val gearDestroyed: Int,
+    val vantsDamagedCount: Int,
+    val homeCityId: String
+)
 
 enum class GameMap(
     val displayName: String,
@@ -552,6 +1085,7 @@ class VantDrone(
     val tier: VantTier,
     val config1Slots: MutableList<EquipmentItem?> = MutableList(tier.slotCount) { null },
     val config2Slots: MutableList<EquipmentItem?> = MutableList(tier.slotCount) { null },
+    var durabilityPct: Int = 100,
     var worldX: Float = 0f,
     var worldY: Float = 0f,
     var facingRad: Float = 0f,
@@ -565,13 +1099,15 @@ data class SavedVant(
     val id: Int,
     val tier: VantTier,
     val config1SlotIds: List<Int?>,
-    val config2SlotIds: List<Int?>
+    val config2SlotIds: List<Int?>,
+    val durabilityPct: Int = 100
 )
 
 data class VantSnapshot(
     val id: Int,
     val tier: VantTier,
-    val activeSlots: List<EquipmentItem?>
+    val activeSlots: List<EquipmentItem?>,
+    val durabilityPct: Int = 100
 )
 
 enum class EquipmentCategory {
@@ -791,8 +1327,34 @@ object MissionCatalog {
 
 data class EquipmentItem(
     val instanceId: Int,
-    val type: EquipmentItemId
-)
+    val type: EquipmentItemId,
+    val quality: CraftQuality = CraftQuality.STANDARD
+) {
+    val effectiveDamageBonus: Float
+        get() = quality.applyBonus(type.damageBonus)
+
+    val effectiveShieldBonus: Float
+        get() = quality.applyBonus(type.shieldBonus)
+
+    val effectivePrimaryStat: Float
+        get() = when (type.category) {
+            EquipmentCategory.LASER -> effectiveDamageBonus
+            EquipmentCategory.SHIELD_GENERATOR -> effectiveShieldBonus
+            EquipmentCategory.SECTOR_CHIP -> quality.applyBonus(type.sectorTier.toFloat())
+        }
+}
+
+data class BoosterItem(
+    val id: String,
+    val displayName: String,
+    val basePrimaryBonusPct: Float,
+    val durationSec: Float,
+    val requiresXenoCore: Boolean = false,
+    val quality: CraftQuality = CraftQuality.STANDARD
+) {
+    val effectivePrimaryBonusPct: Float
+        get() = quality.applyBonus(basePrimaryBonusPct)
+}
 
 enum class LootBoxKind {
     BONUS_BOX,
@@ -821,12 +1383,12 @@ class PlayerState(
     var shipClass: ShipClass = ShipClass.INTERCEPTOR,
     var level: Int = 1,
     var xp: Int = 0,
-    var hp: Float = ShipClass.INTERCEPTOR.baseHull,
-    var maxHp: Float = ShipClass.INTERCEPTOR.baseHull,
-    var shield: Float = GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus,
-    var maxShield: Float = GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus,
-    var speed: Float = ShipClass.INTERCEPTOR.speed,
-    var laserDamage: Float = GameConfig.PLAYER_BASE_LASER_DAMAGE + EquipmentItemId.LF_1.damageBonus,
+    var hp: Float = CapsulePermanentConfig.BASE_HULL,
+    var maxHp: Float = CapsulePermanentConfig.BASE_HULL,
+    var shield: Float = CapsulePermanentConfig.BASE_SHIELD + CapsulePermanentConfig.PERMANENT_SHIELD_BONUS,
+    var maxShield: Float = CapsulePermanentConfig.BASE_SHIELD + CapsulePermanentConfig.PERMANENT_SHIELD_BONUS,
+    var speed: Float = CapsulePermanentConfig.SPEED,
+    var laserDamage: Float = GameConfig.PLAYER_BASE_LASER_DAMAGE + CapsulePermanentConfig.PERMANENT_LASER_DAMAGE,
     var isMoving: Boolean = false,
     var isAutoFireEnabled: Boolean = false,
     var currentZone: SpaceZone = SpaceZone.SAFE_ZONE,
@@ -842,7 +1404,13 @@ class PlayerState(
     var timeSinceDamaged: Float = GameConfig.SHIELD_REGEN_DELAY,
     var isAlive: Boolean = true,
     var thrusterPulse: Float = 0f,
-    var thrustFactor: Float = 0f
+    var thrustFactor: Float = 0f,
+    var shipQuality: CraftQuality = CraftQuality.STANDARD,
+    var shipRole: ShipRole = ShipRole.CAPSULE,
+    var industrialType: IndustrialType? = null,
+    var activeHullId: String = "CAPSULE_T1",
+    var hullRadius: Float = CapsulePermanentConfig.HULL_RADIUS,
+    var pilotSkills: Map<SkillType, SkillProgress> = defaultPilotSkills()
 )
 
 class AlienEntity(
@@ -933,66 +1501,196 @@ class FloatingPopup(
     val textSize: Float = 14f
 )
 
+enum class ResourceCategory {
+    SOLID,
+    PLASMA,
+    SALVAGE
+}
+
+enum class RefinedResourceType(
+    val displayName: String,
+    val category: ResourceCategory,
+    val colorHex: Long
+) {
+    COBALT_ALLOY("Cobalt Alloy", ResourceCategory.SOLID, 0xFF38BDF8),
+    AETHER_CRYSTAL("Aether Crystal", ResourceCategory.PLASMA, 0xFF0EA5E9),
+    VERIDIAN_INGOT("Veridian Ingot", ResourceCategory.SOLID, 0xFF4ADE80),
+    BIO_POLYMER("Bio Polymer", ResourceCategory.PLASMA, 0xFF34D399),
+    CRIMSON_STEEL("Crimson Steel", ResourceCategory.SOLID, 0xFFFB7185),
+    THERMAL_CORE("Thermal Core", ResourceCategory.PLASMA, 0xFFF97316),
+    REFINED_YELLOW_CRYSTAL("Refined Yellow Crystal", ResourceCategory.PLASMA, 0xFFFACC15),
+    XENO_ALLOY("Xeno Alloy", ResourceCategory.SALVAGE, 0xFFC084FC)
+}
+
 /**
- * Tiered mineable resources enforcing the Clockwise City Refining Loop:
- * - City 1 (Blue / C1) native raw ores -> refine in City 2 (Green / C2)
- * - City 2 (Green / C2) native raw ores -> refine in City 3 (Red / C3)
- * - City 3 (Red / C3) native raw ores -> refine in City 1 (Blue / C1)
- * - Yellow Crystal -> refines exclusively in Nucleus (0-0) Black Market Safe Zone
+ * v1.10 Resources & Categories enforcing the Clockwise City Refining Loop,
+ * Nucleus multi-city refining, and Alien Salvage:
+ * - C1 (refines in C2): STAR_COBALT (SOLID) -> COBALT_ALLOY, AETHER_QUARTZ (PLASMA) -> AETHER_CRYSTAL
+ * - C2 (refines in C3): VERIDIAN_ORE (SOLID) -> VERIDIAN_INGOT, BIO_RESIN (PLASMA) -> BIO_POLYMER
+ * - C3 (refines in C1): CRIMSON_IRON (SOLID) -> CRIMSON_STEEL, MAGMA_STONE (PLASMA) -> THERMAL_CORE
+ * - Nucleus 0-0 (refines in C1, C2, C3): YELLOW_CRYSTAL (PLASMA) -> REFINED_YELLOW_CRYSTAL
+ * - Alien Salvage (refines in C1, C2, C3): XENO_SALVAGE (SALVAGE) -> XENO_ALLOY, plus rare XENO_CORE (direct use)
  */
 enum class ResourceType(
     val displayName: String,
     val refinedName: String,
+    val category: ResourceCategory,
+    val refinedResource: RefinedResourceType?,
     val tier: Int,
     val nativeSectorId: String,
-    val refinesInSectorId: String,
+    val refinesInSectorIds: Set<String>,
     val rawBasePrice: Int,
     val refinedBasePrice: Int,
     val colorHex: Long,
-    val isYellowCrystal: Boolean = false
+    val isYellowCrystal: Boolean = false,
+    val isDirectUse: Boolean = false,
+    val isRare: Boolean = false
 ) {
     // Native to City 1 (Blue / C1) -> Refines in City 2 (Green / C2)
-    AETHER_T1("Cobalt Dust", "Cobalt Ingot", 1, "C1", "C2", 45, 140, 0xFF38BDF8),
-    AETHER_T2("Cryo Quartz", "Cryo Prism", 2, "C1", "C2", 85, 260, 0xFF0EA5E9),
-    AETHER_T3("Ionite Shard", "Ionite Core", 3, "C1", "C2", 160, 480, 0xFF60A5FA),
-    AETHER_T4("Aetherium Ore", "Aetherium Plate", 4, "C1", "C2", 290, 870, 0xFF818CF8),
-    AETHER_T5("Void Sapphire", "Void Alloy", 5, "C1", "C2", 520, 1560, 0xFFA78BFA),
+    STAR_COBALT(
+        displayName = "Star Cobalt",
+        refinedName = "Cobalt Alloy",
+        category = ResourceCategory.SOLID,
+        refinedResource = RefinedResourceType.COBALT_ALLOY,
+        tier = 1,
+        nativeSectorId = "C1",
+        refinesInSectorIds = setOf("C2"),
+        rawBasePrice = 60,
+        refinedBasePrice = 185,
+        colorHex = 0xFF38BDF8
+    ),
+    AETHER_QUARTZ(
+        displayName = "Aether Quartz",
+        refinedName = "Aether Crystal",
+        category = ResourceCategory.PLASMA,
+        refinedResource = RefinedResourceType.AETHER_CRYSTAL,
+        tier = 2,
+        nativeSectorId = "C1",
+        refinesInSectorIds = setOf("C2"),
+        rawBasePrice = 115,
+        refinedBasePrice = 340,
+        colorHex = 0xFF0EA5E9
+    ),
 
     // Native to City 2 (Green / C2) -> Refines in City 3 (Red / C3)
-    VERDANT_T1("Beryl Moss", "Beryl Fiber", 1, "C2", "C3", 45, 140, 0xFF4ADE80),
-    VERDANT_T2("Jade Silicate", "Jade Matrix", 2, "C2", "C3", 85, 260, 0xFF22C55E),
-    VERDANT_T3("Viridium Ore", "Viridium Bar", 3, "C2", "C3", 160, 480, 0xFF10B981),
-    VERDANT_T4("Bio-Plasma", "Plasma Gel", 4, "C2", "C3", 290, 870, 0xFF34D399),
-    VERDANT_T5("Emerald Core", "Emerald Alloy", 5, "C2", "C3", 520, 1560, 0xFF2DD4BF),
+    VERIDIAN_ORE(
+        displayName = "Veridian Ore",
+        refinedName = "Veridian Ingot",
+        category = ResourceCategory.SOLID,
+        refinedResource = RefinedResourceType.VERIDIAN_INGOT,
+        tier = 1,
+        nativeSectorId = "C2",
+        refinesInSectorIds = setOf("C3"),
+        rawBasePrice = 60,
+        refinedBasePrice = 185,
+        colorHex = 0xFF4ADE80
+    ),
+    BIO_RESIN(
+        displayName = "Bio Resin",
+        refinedName = "Bio Polymer",
+        category = ResourceCategory.PLASMA,
+        refinedResource = RefinedResourceType.BIO_POLYMER,
+        tier = 2,
+        nativeSectorId = "C2",
+        refinesInSectorIds = setOf("C3"),
+        rawBasePrice = 115,
+        refinedBasePrice = 340,
+        colorHex = 0xFF34D399
+    ),
 
     // Native to City 3 (Red / C3) -> Refines in City 1 (Blue / C1)
-    SOLARIS_T1("Ferrite Slag", "Ferrite Steel", 1, "C3", "C1", 45, 140, 0xFFFB7185),
-    SOLARIS_T2("Pyro Sulfur", "Pyro Cell", 2, "C3", "C1", 85, 260, 0xFFF43F5E),
-    SOLARIS_T3("Crimson Ore", "Crimson Alloy", 3, "C3", "C1", 160, 480, 0xFFEF4444),
-    SOLARIS_T4("Solarite Vein", "Solarite Rod", 4, "C3", "C1", 290, 870, 0xFFFB923C),
-    SOLARIS_T5("Magma Core", "Starfire Ingot", 5, "C3", "C1", 520, 1560, 0xFFF97316),
+    CRIMSON_IRON(
+        displayName = "Crimson Iron",
+        refinedName = "Crimson Steel",
+        category = ResourceCategory.SOLID,
+        refinedResource = RefinedResourceType.CRIMSON_STEEL,
+        tier = 1,
+        nativeSectorId = "C3",
+        refinesInSectorIds = setOf("C1"),
+        rawBasePrice = 60,
+        refinedBasePrice = 185,
+        colorHex = 0xFFFB7185
+    ),
+    MAGMA_STONE(
+        displayName = "Magma Stone",
+        refinedName = "Thermal Core",
+        category = ResourceCategory.PLASMA,
+        refinedResource = RefinedResourceType.THERMAL_CORE,
+        tier = 2,
+        nativeSectorId = "C3",
+        refinesInSectorIds = setOf("C1"),
+        rawBasePrice = 115,
+        refinedBasePrice = 340,
+        colorHex = 0xFFF97316
+    ),
 
-    // High-Risk Yellow Ring & Nucleus exclusive -> Refines exclusively in Nucleus (0-0)
+    // Nucleus 0-0 & Yellow Ring -> Refines in C1, C2, or C3
     YELLOW_CRYSTAL(
         displayName = "Yellow Crystal",
         refinedName = "Refined Yellow Crystal",
+        category = ResourceCategory.PLASMA,
+        refinedResource = RefinedResourceType.REFINED_YELLOW_CRYSTAL,
         tier = 5,
         nativeSectorId = "0-0",
-        refinesInSectorId = "0-0",
+        refinesInSectorIds = setOf("C1", "C2", "C3"),
         rawBasePrice = 760,
         refinedBasePrice = 2450,
         colorHex = 0xFFFACC15,
         isYellowCrystal = true
+    ),
+
+    // Alien Salvage -> Refines in C1, C2, or C3
+    XENO_SALVAGE(
+        displayName = "Xeno Salvage",
+        refinedName = "Xeno Alloy",
+        category = ResourceCategory.SALVAGE,
+        refinedResource = RefinedResourceType.XENO_ALLOY,
+        tier = 3,
+        nativeSectorId = "ALIEN",
+        refinesInSectorIds = setOf("C1", "C2", "C3"),
+        rawBasePrice = 240,
+        refinedBasePrice = 720,
+        colorHex = 0xFFC084FC
+    ),
+
+    // Rare Alien Salvage -> Direct use for Nucleus boosters (no refining)
+    XENO_CORE(
+        displayName = "Xeno Core",
+        refinedName = "Xeno Core",
+        category = ResourceCategory.SALVAGE,
+        refinedResource = null,
+        tier = 5,
+        nativeSectorId = "ALIEN",
+        refinesInSectorIds = emptySet(),
+        rawBasePrice = 1200,
+        refinedBasePrice = 1200,
+        colorHex = 0xFFE879F9,
+        isDirectUse = true,
+        isRare = true
     );
+
+    /** Primary refining sector ID for legacy single-city display/checks. */
+    val refinesInSectorId: String
+        get() = refinesInSectorIds.firstOrNull().orEmpty()
+
+    val isRefinable: Boolean
+        get() = !isDirectUse && refinedResource != null && refinesInSectorIds.isNotEmpty()
+
+    fun canRefineIn(sectorId: String): Boolean =
+        isRefinable && sectorId in refinesInSectorIds
 
     companion object {
         const val RAW_REQUIRED_PER_REFINE = 2
 
         fun forRegionAndTier(nativeCityId: String, tier: Int): ResourceType {
-            val clamped = tier.coerceIn(1, 5)
-            return entries.firstOrNull {
-                !it.isYellowCrystal && it.nativeSectorId == nativeCityId && it.tier == clamped
-            } ?: AETHER_T1
+            val usePlasma = tier % 2 == 0
+            return when (nativeCityId) {
+                "C1" -> if (usePlasma) AETHER_QUARTZ else STAR_COBALT
+                "C2" -> if (usePlasma) BIO_RESIN else VERIDIAN_ORE
+                "C3" -> if (usePlasma) MAGMA_STONE else CRIMSON_IRON
+                "0-0" -> YELLOW_CRYSTAL
+                else -> STAR_COBALT
+            }
         }
     }
 }
@@ -1006,8 +1704,49 @@ class ResourceNodeEntity(
     val radius: Float,
     var rotationRad: Float,
     var pulsePhase: Float,
-    var harvestProgress: Float = 0f
-)
+    var harvestProgress: Float = 0f,
+    val maxCharges: Int = DEFAULT_MAX_CHARGES,
+    var charges: Int = maxCharges
+) {
+    val isDepleted: Boolean get() = charges <= 0
+
+    companion object {
+        const val MIN_CHARGES = 4
+        const val MAX_CHARGES = 5
+        const val DEFAULT_MAX_CHARGES = 4
+    }
+}
+
+/**
+ * Salvageable wreck dropped by destroyed alien ships (2–4 charges with expiration timer).
+ */
+class AlienWreck(
+    val id: Int,
+    val sourceTier: AlienTier,
+    val fromBoss: Boolean = false,
+    var x: Float,
+    var y: Float,
+    var rotationRad: Float = 0f,
+    val radius: Float = if (fromBoss) 28f else 22f,
+    val maxCharges: Int = DEFAULT_MAX_CHARGES,
+    var charges: Int = maxCharges,
+    var expirationTimerSec: Float = DEFAULT_LIFETIME_SEC,
+    val maxExpirationSec: Float = DEFAULT_LIFETIME_SEC,
+    var salvageProgress: Float = 0f,
+    var pulsePhase: Float = 0f
+) {
+    val isExpired: Boolean get() = expirationTimerSec <= 0f
+    val isDepleted: Boolean get() = charges <= 0 || isExpired
+    val remainingLifetimeRatio: Float
+        get() = if (maxExpirationSec > 0f) (expirationTimerSec / maxExpirationSec).coerceIn(0f, 1f) else 0f
+
+    companion object {
+        const val MIN_CHARGES = 2
+        const val MAX_CHARGES = 4
+        const val DEFAULT_MAX_CHARGES = 3
+        const val DEFAULT_LIFETIME_SEC = 90f
+    }
+}
 
 enum class StationKind {
     REFINERY,
@@ -1129,7 +1868,14 @@ data class SaveState(
     val currentSectorId: String = GalaxyMapGraph.DEFAULT_SECTOR_ID,
     val rawCargo: Map<ResourceType, Int> = emptyMap(),
     val refinedCargo: Map<ResourceType, Int> = emptyMap(),
-    val overchargedAmmo: Int = 0
+    val overchargedAmmo: Int = 0,
+    val activeShipQuality: CraftQuality = CraftQuality.STANDARD,
+    val pilotSkills: Map<SkillType, SkillProgress> = defaultPilotSkills(),
+    val craftedHangarShips: List<CraftedShipRecord> = emptyList(),
+    val craftedInventoryItems: List<CraftedItemRecord> = emptyList(),
+    val isFlyingCapsule: Boolean = true,
+    val activeCraftedShipId: Int? = null,
+    val basicVendorItems: Map<BasicVendorItemId, Int> = emptyMap()
 )
 
 data class MissionSnapshot(
@@ -1144,7 +1890,12 @@ data class MissionSnapshot(
 data class EquipmentSnapshot(
     val activeConfig: Int = 1,
     val activeShipClass: ShipClass = ShipClass.INTERCEPTOR,
-    val ownedShipClasses: Set<ShipClass> = setOf(ShipClass.INTERCEPTOR),
+    val ownedShipClasses: Set<ShipClass> = emptySet(),
+    val isFlyingCapsule: Boolean = true,
+    val activeCraftedShipId: Int? = null,
+    val activeShipRole: ShipRole = ShipRole.CAPSULE,
+    val activeIndustrialType: IndustrialType? = null,
+    val activeShipDisplayName: String = "Pilot Capsule",
     val equippedSectorChip: EquipmentItem? = null,
     val laserSlots: List<EquipmentItem?> = List(ShipClass.INTERCEPTOR.laserSlotCount) { null },
     val shieldSlots: List<EquipmentItem?> = List(ShipClass.INTERCEPTOR.shieldSlotCount) { null },
@@ -1155,11 +1906,14 @@ data class EquipmentSnapshot(
     val activeFormation: DroneFormation = DroneFormation.NORMAL,
     val inventory: List<EquipmentItem> = emptyList(),
     val ownedItemCounts: Map<EquipmentItemId, Int> = emptyMap(),
+    val basicVendorItemCounts: Map<BasicVendorItemId, Int> = emptyMap(),
     val hasAnyReadyFusion: Boolean = false,
-    val totalDamage: Int = (GameConfig.PLAYER_BASE_LASER_DAMAGE + EquipmentItemId.LF_1.damageBonus).toInt(),
-    val totalMaxShield: Int = (GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus).toInt(),
-    val totalSpeed: Int = ShipClass.INTERCEPTOR.speed.toInt(),
-    val totalMaxHull: Int = ShipClass.INTERCEPTOR.baseHull.toInt()
+    val totalDamage: Int = (GameConfig.PLAYER_BASE_LASER_DAMAGE + CapsulePermanentConfig.PERMANENT_LASER_DAMAGE).toInt(),
+    val totalMaxShield: Int = (CapsulePermanentConfig.BASE_SHIELD + CapsulePermanentConfig.PERMANENT_SHIELD_BONUS).toInt(),
+    val totalSpeed: Int = CapsulePermanentConfig.SPEED.toInt(),
+    val totalMaxHull: Int = CapsulePermanentConfig.BASE_HULL.toInt(),
+    val activeShipQuality: CraftQuality = CraftQuality.STANDARD,
+    val totalCargoCapacity: Int = CapsulePermanentConfig.CARGO_CAPACITY
 )
 
 data class HudSnapshot(
@@ -1170,21 +1924,27 @@ data class HudSnapshot(
     val playerXpToNext: Int = GameConfig.xpRequiredForLevel(1),
     val activeConfig: Int = 1,
     val activeShipClass: ShipClass = ShipClass.INTERCEPTOR,
+    val isFlyingCapsule: Boolean = true,
+    val activeCraftedShipId: Int? = null,
+    val activeShipDisplayName: String = "Pilot Capsule",
     val activeFormation: DroneFormation = DroneFormation.NORMAL,
     val formationCooldownRemaining: Float = 0f,
     val ownedFormationCount: Int = 1,
     val isAutopilotActive: Boolean = false,
     val autopilotTargetX: Int = 0,
     val autopilotTargetY: Int = 0,
+    val autopilotTargetLabel: String = "",
+    val autopilotEtaSeconds: Int = 0,
+    val autopilotNoticeText: String? = null,
     val isTacticalMapOpen: Boolean = false,
     val isGalaxyMapOpen: Boolean = false,
     val currentSectorId: String = GalaxyMapGraph.DEFAULT_SECTOR_ID,
     val plottedRoute: List<String> = emptyList(),
     val nextRouteHopSectorId: String? = null,
-    val playerHp: Int = ShipClass.INTERCEPTOR.baseHull.toInt(),
-    val playerMaxHp: Int = ShipClass.INTERCEPTOR.baseHull.toInt(),
-    val playerShield: Int = (GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus).toInt(),
-    val playerMaxShield: Int = (GameConfig.PLAYER_BASE_MAX_SHIELD + EquipmentItemId.SG_1.shieldBonus).toInt(),
+    val playerHp: Int = CapsulePermanentConfig.BASE_HULL.toInt(),
+    val playerMaxHp: Int = CapsulePermanentConfig.BASE_HULL.toInt(),
+    val playerShield: Int = (CapsulePermanentConfig.BASE_SHIELD + CapsulePermanentConfig.PERMANENT_SHIELD_BONUS).toInt(),
+    val playerMaxShield: Int = (CapsulePermanentConfig.BASE_SHIELD + CapsulePermanentConfig.PERMANENT_SHIELD_BONUS).toInt(),
     val coordX: Int = 0,
     val coordY: Int = 0,
     val activeMap: GameMap = GameMap.MAIN_MAP,
@@ -1217,5 +1977,11 @@ data class HudSnapshot(
     val miningNodeName: String? = null,
     val miningProgress: Float = 0f,
     val equipment: EquipmentSnapshot = EquipmentSnapshot(),
-    val mission: MissionSnapshot = MissionSnapshot()
+    val mission: MissionSnapshot = MissionSnapshot(),
+    val pilotSkills: Map<SkillType, SkillProgress> = defaultPilotSkills(),
+    val craftedHangarShips: List<CraftedShipRecord> = emptyList(),
+    val craftedInventoryItems: List<CraftedItemRecord> = emptyList(),
+    val lastDeathSummary: DeathSummary? = null,
+    val activeSectorWreckCount: Int = 0,
+    val isAdminMode: Boolean = false
 )

@@ -33,6 +33,7 @@ class GamePersistence(context: Context) {
                     JSONObject().apply {
                         put("id", item.instanceId)
                         put("type", item.type.name)
+                        put("quality", item.quality.name)
                     }
                 )
             }
@@ -50,6 +51,7 @@ class GamePersistence(context: Context) {
                         put("tier", vant.tier.name)
                         put("c1Slots", encodeSlotIds(vant.config1SlotIds))
                         put("c2Slots", encodeSlotIds(vant.config2SlotIds))
+                        put("durabilityPct", vant.durabilityPct)
                     }
                 )
             }
@@ -67,6 +69,13 @@ class GamePersistence(context: Context) {
             put("rawCargo", encodeCargoMap(state.rawCargo))
             put("refinedCargo", encodeCargoMap(state.refinedCargo))
             put("overchargedAmmo", state.overchargedAmmo)
+            put("activeShipQuality", state.activeShipQuality.name)
+            put("pilotSkills", encodePilotSkills(state.pilotSkills))
+            put("craftedHangarShips", encodeCraftedShips(state.craftedHangarShips))
+            put("craftedInventoryItems", encodeCraftedItems(state.craftedInventoryItems))
+            put("isFlyingCapsule", state.isFlyingCapsule)
+            put("activeCraftedShipId", state.activeCraftedShipId ?: JSONObject.NULL)
+            put("basicVendorItems", encodeBasicVendorItems(state.basicVendorItems))
         }
         prefs.edit()
             .putString(KEY_SAVE_JSON, root.toString())
@@ -93,24 +102,28 @@ class GamePersistence(context: Context) {
                 val id = obj.optInt("id", -1)
                 val typeName = obj.optString("type", "")
                 val type = EquipmentItemId.entries.firstOrNull { it.name == typeName } ?: continue
+                val quality = CraftQuality.entries.firstOrNull {
+                    it.name == obj.optString("quality", CraftQuality.STANDARD.name)
+                } ?: CraftQuality.STANDARD
                 if (id > 0) {
-                    ownedItems.add(EquipmentItem(instanceId = id, type = type))
+                    ownedItems.add(EquipmentItem(instanceId = id, type = type, quality = quality))
                 }
             }
-            if (ownedItems.isEmpty()) return null
-
-            val ownedShips = mutableSetOf(ShipClass.INTERCEPTOR)
+            val ownedShips = mutableSetOf<ShipClass>()
             val shipsArray = root.optJSONArray("ownedShipClasses")
             if (shipsArray != null) {
                 for (i in 0 until shipsArray.length()) {
                     val shipName = shipsArray.optString(i, "")
                     ShipClass.entries.firstOrNull { it.name == shipName }?.let { ownedShips.add(it) }
                 }
+            } else {
+                // Legacy save fallback only when field did not exist
+                ownedShips.add(ShipClass.INTERCEPTOR)
             }
 
             val parsedActiveShip = ShipClass.entries.firstOrNull {
                 it.name == root.optString("activeShipClass", ShipClass.INTERCEPTOR.name)
-            }?.takeIf { it in ownedShips } ?: ShipClass.INTERCEPTOR
+            }?.takeIf { it in ownedShips } ?: ownedShips.firstOrNull() ?: ShipClass.INTERCEPTOR
 
             val chipId = if (root.isNull("equippedSectorChipId")) {
                 null
@@ -127,12 +140,14 @@ class GamePersistence(context: Context) {
                     val vId = vObj.optInt("id", i + 1).coerceAtLeast(1)
                     val tierName = vObj.optString("tier", "")
                     val tier = VantTier.entries.firstOrNull { it.name == tierName } ?: continue
+                    val dur = vObj.optInt("durabilityPct", 100).coerceIn(0, 100)
                     parsedVants.add(
                         SavedVant(
                             id = vId,
                             tier = tier,
                             config1SlotIds = decodeSlotIds(vObj.optJSONArray("c1Slots"), tier.slotCount),
-                            config2SlotIds = decodeSlotIds(vObj.optJSONArray("c2Slots"), tier.slotCount)
+                            config2SlotIds = decodeSlotIds(vObj.optJSONArray("c2Slots"), tier.slotCount),
+                            durabilityPct = dur
                         )
                     )
                 }
@@ -196,7 +211,24 @@ class GamePersistence(context: Context) {
                 } ?: GalaxyMapGraph.homeCityForCompany(PilotCompany.fromId(savedCompanyId)),
                 rawCargo = decodeCargoMap(root.optJSONObject("rawCargo")),
                 refinedCargo = decodeCargoMap(root.optJSONObject("refinedCargo")),
-                overchargedAmmo = root.optInt("overchargedAmmo", 0).coerceAtLeast(0)
+                overchargedAmmo = root.optInt("overchargedAmmo", 0).coerceAtLeast(0),
+                activeShipQuality = CraftQuality.entries.firstOrNull {
+                    it.name == root.optString("activeShipQuality", CraftQuality.STANDARD.name)
+                } ?: CraftQuality.STANDARD,
+                pilotSkills = decodePilotSkills(root.optJSONObject("pilotSkills")),
+                craftedHangarShips = decodeCraftedShips(root.optJSONArray("craftedHangarShips")),
+                craftedInventoryItems = decodeCraftedItems(root.optJSONArray("craftedInventoryItems")),
+                isFlyingCapsule = if (root.has("isFlyingCapsule")) {
+                    root.optBoolean("isFlyingCapsule", true)
+                } else {
+                    ownedShips.isEmpty()
+                },
+                activeCraftedShipId = if (!root.has("activeCraftedShipId") || root.isNull("activeCraftedShipId")) {
+                    null
+                } else {
+                    root.optInt("activeCraftedShipId", -1).takeIf { it > 0 }
+                },
+                basicVendorItems = decodeBasicVendorItems(root.optJSONObject("basicVendorItems"))
             )
         } catch (_: Exception) {
             null
@@ -243,6 +275,144 @@ class GamePersistence(context: Context) {
         for (res in ResourceType.entries) {
             val qty = obj.optInt(res.name, 0)
             if (qty > 0) result[res] = qty
+        }
+        return result
+    }
+
+    private fun encodePilotSkills(skills: Map<SkillType, SkillProgress>): JSONObject {
+        val obj = JSONObject()
+        for (skill in SkillType.entries) {
+            val progress = skills[skill] ?: SkillProgress()
+            obj.put(
+                skill.name,
+                JSONObject().apply {
+                    put("level", progress.level)
+                    put("xp", progress.xp)
+                }
+            )
+        }
+        return obj
+    }
+
+    private fun decodePilotSkills(obj: JSONObject?): Map<SkillType, SkillProgress> {
+        val defaults = defaultPilotSkills().toMutableMap()
+        if (obj == null) return defaults
+        for (skill in SkillType.entries) {
+            val sObj = obj.optJSONObject(skill.name) ?: continue
+            val level = sObj.optInt("level", PILOT_SKILL_MIN_LEVEL)
+                .coerceIn(PILOT_SKILL_MIN_LEVEL, PILOT_SKILL_MAX_LEVEL)
+            val xp = sObj.optLong("xp", 0L).coerceAtLeast(0L)
+            defaults[skill] = SkillProgress(level = level, xp = xp)
+        }
+        return defaults
+    }
+
+    private fun encodeCraftedShips(ships: List<CraftedShipRecord>): JSONArray {
+        val arr = JSONArray()
+        for (ship in ships) {
+            arr.put(
+                JSONObject().apply {
+                    put("id", ship.instanceId)
+                    put("recipeId", ship.recipeId.name)
+                    put("hullId", ship.hullId)
+                    put("industrialType", ship.industrialType.name)
+                    put("quality", ship.quality.name)
+                    put("hp", ship.effectiveHull)
+                    put("shd", ship.effectiveShield)
+                    put("cargo", ship.effectiveCargo)
+                }
+            )
+        }
+        return arr
+    }
+
+    private fun decodeCraftedShips(arr: JSONArray?): List<CraftedShipRecord> {
+        if (arr == null) return emptyList()
+        val out = mutableListOf<CraftedShipRecord>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val recipe = StationCraftRecipeId.entries.firstOrNull {
+                it.name == obj.optString("recipeId", "")
+            } ?: continue
+            val indType = IndustrialType.entries.firstOrNull {
+                it.name == obj.optString("industrialType", "")
+            } ?: recipe.industrialType ?: continue
+            val quality = CraftQuality.entries.firstOrNull {
+                it.name == obj.optString("quality", CraftQuality.STANDARD.name)
+            } ?: CraftQuality.STANDARD
+            out.add(
+                CraftedShipRecord(
+                    instanceId = obj.optInt("id", i + 1).coerceAtLeast(1),
+                    recipeId = recipe,
+                    hullId = obj.optString("hullId", recipe.shipHullId ?: recipe.name),
+                    industrialType = indType,
+                    quality = quality,
+                    effectiveHull = obj.optInt("hp", 220).coerceAtLeast(1),
+                    effectiveShield = obj.optInt("shd", 140).coerceAtLeast(1),
+                    effectiveCargo = obj.optInt("cargo", 240).coerceAtLeast(1)
+                )
+            )
+        }
+        return out
+    }
+
+    private fun encodeCraftedItems(items: List<CraftedItemRecord>): JSONArray {
+        val arr = JSONArray()
+        for (item in items) {
+            arr.put(
+                JSONObject().apply {
+                    put("id", item.instanceId)
+                    put("recipeId", item.recipeId.name)
+                    put("quality", item.quality.name)
+                    put("stat", item.effectivePrimaryStat.toDouble())
+                    put("dur", item.effectiveDurationMinutes)
+                    put("qty", item.quantity)
+                }
+            )
+        }
+        return arr
+    }
+
+    private fun decodeCraftedItems(arr: JSONArray?): List<CraftedItemRecord> {
+        if (arr == null) return emptyList()
+        val out = mutableListOf<CraftedItemRecord>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val recipe = StationCraftRecipeId.entries.firstOrNull {
+                it.name == obj.optString("recipeId", "")
+            } ?: continue
+            val quality = CraftQuality.entries.firstOrNull {
+                it.name == obj.optString("quality", CraftQuality.STANDARD.name)
+            } ?: CraftQuality.STANDARD
+            val qty = obj.optInt("qty", 1).coerceAtLeast(1)
+            out.add(
+                CraftedItemRecord(
+                    instanceId = obj.optInt("id", i + 1).coerceAtLeast(1),
+                    recipeId = recipe,
+                    quality = quality,
+                    effectivePrimaryStat = obj.optDouble("stat", recipe.basePrimaryStat.toDouble()).toFloat(),
+                    effectiveDurationMinutes = obj.optInt("dur", recipe.baseDurationMinutes).coerceAtLeast(0),
+                    quantity = qty
+                )
+            )
+        }
+        return out
+    }
+
+    private fun encodeBasicVendorItems(items: Map<BasicVendorItemId, Int>): JSONObject {
+        val obj = JSONObject()
+        for ((item, qty) in items) {
+            if (qty > 0) obj.put(item.name, qty)
+        }
+        return obj
+    }
+
+    private fun decodeBasicVendorItems(obj: JSONObject?): Map<BasicVendorItemId, Int> {
+        if (obj == null) return emptyMap()
+        val result = linkedMapOf<BasicVendorItemId, Int>()
+        for (item in BasicVendorItemId.entries) {
+            val qty = obj.optInt(item.name, 0)
+            if (qty > 0) result[item] = qty
         }
         return result
     }

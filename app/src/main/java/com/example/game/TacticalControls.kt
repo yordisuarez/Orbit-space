@@ -10,6 +10,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
@@ -37,14 +38,15 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Handyman
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.DropdownMenu
@@ -116,6 +118,7 @@ fun VirtualJoystick(
     tag: String,
     modifier: Modifier = Modifier,
     size: Dp = 132.dp,
+    onTouchStart: (() -> Unit)? = null,
     onMove: (Float, Float) -> Unit
 ) {
     var knobOffsetX by remember { mutableFloatStateOf(0f) }
@@ -136,6 +139,7 @@ fun VirtualJoystick(
                         val down = awaitFirstDown(requireUnconsumed = true)
                         down.consume()
                         isPressed = true
+                        onTouchStart?.invoke()
 
                         val centerX = this.size.width * 0.5f
                         val centerY = this.size.height * 0.5f
@@ -747,22 +751,30 @@ fun TacticalMinimap(
     modifier: Modifier = Modifier
 ) {
     val tickMarker = frameTick
+    val strings = GameStrings.current()
     val mapDesc = stringResource(R.string.cd_open_tactical_map)
     val sector = engine.currentSector
     val mapSize = sector.mapSize
 
-    Box(
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         modifier = modifier
-            .size(96.dp)
-            .clip(CircleShape)
-            .background(Color(0xDC080D1E))
-            .border(1.6.dp, sector.nodeColor.copy(alpha = 0.78f), CircleShape)
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onExpandMap)
-            .padding(3.dp)
+            .padding(2.dp)
             .testTag("tactical_minimap")
             .semantics { contentDescription = mapDesc }
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .size(92.dp)
+                .clip(CircleShape)
+                .background(Color(0xE0080D1E))
+                .border(1.8.dp, sector.nodeColor.copy(alpha = 0.85f), CircleShape)
+                .padding(3.dp)
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
             @Suppress("UNUSED_EXPRESSION")
             tickMarker
 
@@ -1000,12 +1012,11 @@ fun TacticalMinimap(
                     }
                 }
 
-                // Active Autopilot dashed trajectory line from center toward waypoint (or edge beacon if > 4,500u)
-                val apX = engine.autopilotTargetX
-                val apY = engine.autopilotTargetY
-                if (apX != null && apY != null) {
-                    val dx = apX - playerX
-                    val dy = apY - playerY
+                // Direct Tap-to-Move faint trajectory line & glowing destination crosshair (or edge beacon if off-radar)
+                val target = engine.autoMoveTarget
+                if (target != null) {
+                    val dx = target.x - playerX
+                    val dy = target.y - playerY
                     val worldDist = hypot(dx, dy)
                     if (worldDist > 1f) {
                         val ux = dx / worldDist
@@ -1020,26 +1031,47 @@ fun TacticalMinimap(
                             )
                         }
                         drawLine(
-                            color = CyanLaser.copy(alpha = 0.80f),
+                            color = CyanLaser.copy(alpha = 0.50f),
                             start = center,
                             end = endOffset,
-                            strokeWidth = 1.6f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
+                            strokeWidth = 1.3f,
+                            pathEffect = PathEffect.dashPathEffect(
+                                floatArrayOf(4.5f, 4f),
+                                -engine.elapsedTime * 18f
+                            )
                         )
                         if (withinRadar) {
+                            val ringR = 4.2f + 1.4f * pulse
                             drawCircle(
-                                color = CyanLaser.copy(alpha = 0.5f + 0.45f * pulse),
-                                radius = 5.0f + 1.5f * pulse,
+                                color = CyanLaser.copy(alpha = 0.22f),
+                                radius = ringR + 2.2f,
+                                center = endOffset
+                            )
+                            drawCircle(
+                                color = CyanLaser.copy(alpha = 0.65f + 0.30f * pulse),
+                                radius = ringR,
                                 center = endOffset,
-                                style = Stroke(width = 1.4f)
+                                style = Stroke(width = 1.3f)
+                            )
+                            drawLine(
+                                color = CyanLaser.copy(alpha = 0.9f),
+                                start = Offset(endOffset.x - ringR - 2.2f, endOffset.y),
+                                end = Offset(endOffset.x + ringR + 2.2f, endOffset.y),
+                                strokeWidth = 1.0f
+                            )
+                            drawLine(
+                                color = CyanLaser.copy(alpha = 0.9f),
+                                start = Offset(endOffset.x, endOffset.y - ringR - 2.2f),
+                                end = Offset(endOffset.x, endOffset.y + ringR + 2.2f),
+                                strokeWidth = 1.0f
                             )
                             drawCircle(
                                 color = Color.White,
-                                radius = 2.0f,
+                                radius = 1.7f,
                                 center = endOffset
                             )
                         } else {
-                            // Edge directional indicator pointing toward off-radar waypoint
+                            // Edge directional indicator pointing toward off-radar destination
                             val edgeTip = Offset(
                                 center.x + ux * (radarRadius - 1.5f),
                                 center.y + uy * (radarRadius - 1.5f)
@@ -1083,12 +1115,60 @@ fun TacticalMinimap(
                 drawPath(path = arrow, color = Color.White, style = Stroke(width = 1.6f))
             }
 
-            // Crisp radar rim
-            drawCircle(
-                color = CyanLaser.copy(alpha = 0.45f),
-                radius = radarRadius - 0.8f,
-                center = center,
-                style = Stroke(width = 1.2f)
+                // Crisp radar rim
+                drawCircle(
+                    color = CyanLaser.copy(alpha = 0.45f),
+                    radius = radarRadius - 0.8f,
+                    center = center,
+                    style = Stroke(width = 1.2f)
+                )
+            }
+
+            // Corner expand icon badge directly on the radar rim
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(3.dp)
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xE6041022))
+                    .border(1.dp, CyanLaser.copy(alpha = 0.85f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.OpenInFull,
+                    contentDescription = null,
+                    tint = CyanLaser,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+        }
+
+        // Clear "Tap to Open / Tocar para Abrir" badge below radar
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color(0xDE071326))
+                .border(1.dp, CyanLaser.copy(alpha = 0.72f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .testTag("minimap_tap_to_open_badge")
+        ) {
+            Icon(
+                imageVector = Icons.Default.OpenInFull,
+                contentDescription = null,
+                tint = CyanLaser,
+                modifier = Modifier.size(9.dp)
+            )
+            Text(
+                text = strings.minimapTapToOpen,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = CyanLaser,
+                maxLines = 1,
+                softWrap = false
             )
         }
     }
@@ -1098,12 +1178,17 @@ fun TacticalMinimap(
 fun ExpandableTacticalMapOverlay(
     engine: SpaceGameEngine,
     frameTick: Long,
-    onSetAutopilot: (Float, Float) -> Unit,
+    onTapMapToMove: (Float, Float) -> Unit,
     onOpenGalaxyMap: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tickMarker = frameTick
+    val lang = LocalGameLanguage.current
+    val strings = GameStrings.of(lang)
+    val sector = engine.currentSector
+    val mapSize = sector.mapSize
+
     val labelPaint = remember {
         AndroidPaint().apply {
             isAntiAlias = true
@@ -1113,35 +1198,41 @@ fun ExpandableTacticalMapOverlay(
         }
     }
 
+    val backdropInteraction = remember { MutableInteractionSource() }
+    val contentInteraction = remember { MutableInteractionSource() }
+
     BoxWithConstraints(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0x6E020612))
-            .pointerInput(Unit) {
-                detectTapGestures { onClose() }
-            }
+            .background(Color(0x9E020612))
+            .clickable(
+                interactionSource = backdropInteraction,
+                indication = null,
+                onClick = onClose
+            )
             .testTag("tactical_map_overlay")
     ) {
-        val sector = engine.currentSector
-        val mapSize = sector.mapSize
-        val mapDiameter = min(maxHeight.value * 0.78f, maxWidth.value * 0.78f).coerceAtLeast(220f).dp
+        val mapDiameter = min(maxHeight.value * 0.72f, maxWidth.value * 0.72f).coerceAtLeast(188f).dp
         val mapShape = RoundedCornerShape(14.dp)
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.pointerInput(Unit) {
-                detectTapGestures { }
-            }
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .clickable(
+                    interactionSource = contentInteraction,
+                    indication = null,
+                    onClick = {}
+                )
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xD6071122))
-                    .border(1.dp, sector.nodeColor.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
+                    .background(Color(0xE6071122))
+                    .border(1.2.dp, sector.nodeColor.copy(alpha = 0.78f), RoundedCornerShape(10.dp))
                     .padding(horizontal = 12.dp, vertical = 5.dp)
             ) {
                 Icon(
@@ -1150,11 +1241,11 @@ fun ExpandableTacticalMapOverlay(
                     tint = sector.nodeColor,
                     modifier = Modifier.size(16.dp)
                 )
-                val strings = GameStrings.current()
                 Text(
-                    text = "${strings.localMapSectorPrefix} ${sector.id} • ${sector.name.uppercase()}",
+                    text = "${strings.sectorMapTitle} • ${sector.id} (${sector.name.uppercase()})",
                     style = MaterialTheme.typography.labelLarge,
                     color = sector.nodeColor,
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     softWrap = false
                 )
@@ -1213,18 +1304,20 @@ fun ExpandableTacticalMapOverlay(
                 modifier = Modifier
                     .size(mapDiameter)
                     .clip(mapShape)
-                    .background(Color(0xD8060B1A))
-                    .border(2.2.dp, sector.nodeColor.copy(alpha = 0.85f), mapShape)
-                    .pointerInput(sector.id) {
+                    .background(Color(0xE8060B1A))
+                    .border(2.2.dp, sector.nodeColor.copy(alpha = 0.88f), mapShape)
+                    .pointerInput(sector.id, mapSize) {
                         detectTapGestures { tapOffset ->
-                            val pad = 14f
-                            val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
-                            val usableH = (size.height - pad * 2f).coerceAtLeast(1f)
-                            val normX = ((tapOffset.x - pad) / usableW).coerceIn(0f, 1f)
-                            val normY = ((tapOffset.y - pad) / usableH).coerceIn(0f, 1f)
-                            val wx = (normX * mapSize).coerceIn(200f, mapSize - 200f)
-                            val wy = (normY * mapSize).coerceIn(200f, mapSize - 200f)
-                            onSetAutopilot(wx, wy)
+                            val minDim = min(size.width.toFloat(), size.height.toFloat())
+                            val pad = (minDim * 0.04f).coerceIn(10f, 18f)
+                            val mapSpanPx = (minDim - pad * 2f).coerceAtLeast(1f)
+                            val originX = (size.width.toFloat() - mapSpanPx) * 0.5f
+                            val originY = (size.height.toFloat() - mapSpanPx) * 0.5f
+                            val normX = ((tapOffset.x - originX) / mapSpanPx).coerceIn(0f, 1f)
+                            val normY = ((tapOffset.y - originY) / mapSpanPx).coerceIn(0f, 1f)
+                            val targetWorldX = (normX * mapSize).coerceIn(120f, mapSize - 120f)
+                            val targetWorldY = (normY * mapSize).coerceIn(120f, mapSize - 120f)
+                            onTapMapToMove(targetWorldX, targetWorldY)
                         }
                     }
                     .testTag("tactical_map_circle")
@@ -1234,27 +1327,30 @@ fun ExpandableTacticalMapOverlay(
                     tickMarker
 
                     val pulse = 0.55f + 0.45f * sin(engine.elapsedTime * 6.5f)
-                    val pad = 14f
-                    val mapSpanPx = (size.minDimension - pad * 2f).coerceAtLeast(1f)
-                    val center = Offset(size.width * 0.5f, size.height * 0.5f)
+                    val minDim = size.minDimension
+                    val pad = (minDim * 0.04f).coerceIn(10f, 18f)
+                    val mapSpanPx = (minDim - pad * 2f).coerceAtLeast(1f)
+                    val originX = (size.width - mapSpanPx) * 0.5f
+                    val originY = (size.height - mapSpanPx) * 0.5f
+                    val center = Offset(originX + mapSpanPx * 0.5f, originY + mapSpanPx * 0.5f)
                     val scale = mapSpanPx / mapSize
 
                     fun worldToCanvas(wx: Float, wy: Float): Offset =
-                        Offset(pad + wx * scale, pad + wy * scale)
+                        Offset(originX + wx * scale, originY + wy * scale)
 
                     val gridSteps = 7
                     for (i in 1 until gridSteps) {
-                        val offsetPx = pad + (mapSpanPx * i / gridSteps)
+                        val fracPx = mapSpanPx * i / gridSteps
                         drawLine(
                             color = sector.nodeColor.copy(alpha = 0.16f),
-                            start = Offset(offsetPx, pad),
-                            end = Offset(offsetPx, pad + mapSpanPx),
+                            start = Offset(originX + fracPx, originY),
+                            end = Offset(originX + fracPx, originY + mapSpanPx),
                             strokeWidth = 1.1f
                         )
                         drawLine(
                             color = sector.nodeColor.copy(alpha = 0.16f),
-                            start = Offset(pad, offsetPx),
-                            end = Offset(pad + mapSpanPx, offsetPx),
+                            start = Offset(originX, originY + fracPx),
+                            end = Offset(originX + mapSpanPx, originY + fracPx),
                             strokeWidth = 1.1f
                         )
                     }
@@ -1262,13 +1358,13 @@ fun ExpandableTacticalMapOverlay(
                     // Glowing red square Radiation Zone perimeter
                     drawRect(
                         color = CrimsonDanger.copy(alpha = 0.25f),
-                        topLeft = Offset(pad, pad),
+                        topLeft = Offset(originX, originY),
                         size = androidx.compose.ui.geometry.Size(mapSpanPx, mapSpanPx),
                         style = Stroke(width = 6f)
                     )
                     drawRect(
                         color = CrimsonDanger.copy(alpha = 0.90f),
-                        topLeft = Offset(pad, pad),
+                        topLeft = Offset(originX, originY),
                         size = androidx.compose.ui.geometry.Size(mapSpanPx, mapSpanPx),
                         style = Stroke(width = 2.2f)
                     )
@@ -1417,42 +1513,49 @@ fun ExpandableTacticalMapOverlay(
                         }
                     }
 
-                    // Active Autopilot Dashed Route & Crosshair
-                    val apX = engine.autopilotTargetX
-                    val apY = engine.autopilotTargetY
-                    if (apX != null && apY != null) {
-                        val tPos = worldToCanvas(apX, apY)
+                    // Direct Tap-to-Move faint trajectory line & clean glowing destination crosshair/ring
+                    val moveTarget = engine.autoMoveTarget
+                    if (moveTarget != null) {
+                        val tPos = worldToCanvas(moveTarget.x, moveTarget.y)
                         val tx = tPos.x
                         val ty = tPos.y
                         drawLine(
-                            color = CyanLaser.copy(alpha = 0.72f),
+                            color = CyanLaser.copy(alpha = 0.45f),
                             start = playerPos,
                             end = tPos,
-                            strokeWidth = 2.0f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 7f), 0f)
+                            strokeWidth = 1.8f,
+                            pathEffect = PathEffect.dashPathEffect(
+                                floatArrayOf(8f, 6f),
+                                -engine.elapsedTime * 28f
+                            )
                         )
-                        val wpR = 7.5f + 3f * pulse
+                        val ringR = 7.5f + 2.4f * pulse
                         drawCircle(
-                            color = CyanLaser.copy(alpha = 0.45f + 0.45f * pulse),
-                            radius = wpR,
+                            color = CyanLaser.copy(alpha = 0.18f),
+                            radius = ringR + 3.5f,
+                            center = tPos
+                        )
+                        drawCircle(
+                            color = CyanLaser.copy(alpha = 0.65f + 0.30f * pulse),
+                            radius = ringR,
                             center = tPos,
-                            style = Stroke(width = 1.8f)
+                            style = Stroke(width = 1.7f)
                         )
                         drawLine(
-                            color = CyanLaser,
-                            start = Offset(tx - wpR - 3f, ty),
-                            end = Offset(tx + wpR + 3f, ty),
-                            strokeWidth = 1.4f
+                            color = CyanLaser.copy(alpha = 0.92f),
+                            start = Offset(tx - ringR - 3.5f, ty),
+                            end = Offset(tx + ringR + 3.5f, ty),
+                            strokeWidth = 1.3f
                         )
                         drawLine(
-                            color = CyanLaser,
-                            start = Offset(tx, ty - wpR - 3f),
-                            end = Offset(tx, ty + wpR + 3f),
-                            strokeWidth = 1.4f
+                            color = CyanLaser.copy(alpha = 0.92f),
+                            start = Offset(tx, ty - ringR - 3.5f),
+                            end = Offset(tx, ty + ringR + 3.5f),
+                            strokeWidth = 1.3f
                         )
                         drawCircle(
                             color = Color.White,
-                            radius = 2.5f,
+                            radius = 2.4f,
                             center = tPos
                         )
                     }
@@ -1491,6 +1594,38 @@ fun ExpandableTacticalMapOverlay(
                     drawPath(path = chevron, color = Color.White, style = Stroke(width = 2.0f))
                 }
             }
+
+            // Minimalist single-line tap hint / active destination coordinates (no Autopilot buttons)
+            val activeTarget = engine.autoMoveTarget
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xD6071122))
+                    .border(1.dp, CyanLaser.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .testTag("tactical_map_hint_strip")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.GpsFixed,
+                    contentDescription = null,
+                    tint = CyanLaser,
+                    modifier = Modifier.size(13.dp)
+                )
+                Text(
+                    text = if (activeTarget != null) {
+                        "→ X:${activeTarget.x.toInt()}  Y:${activeTarget.y.toInt()}"
+                    } else {
+                        strings.sectorMapTapHint
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (activeTarget != null) CyanLaser else Color(0xFFCBD5E1),
+                    fontWeight = if (activeTarget != null) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -1498,11 +1633,9 @@ fun ExpandableTacticalMapOverlay(
 @Composable
 fun TopTacticalHud(
     hud: HudSnapshot,
-    onOpenHangar: () -> Unit,
+    onOpenMenu: () -> Unit,
     onOpenGalaxyMap: () -> Unit,
-    onOpenSettings: () -> Unit,
     onToggleConfig: () -> Unit,
-    onCancelAutopilot: () -> Unit,
     onClaimMission: () -> Unit,
     onTogglePause: () -> Unit,
     modifier: Modifier = Modifier
@@ -1519,16 +1652,59 @@ fun TopTacticalHud(
         ),
         label = "hud_pulse_alpha"
     )
+    val hasMenuAlert = hud.mission.isReadyToClaim || hud.equipment.hasAnyReadyFusion
 
     Column(
         verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = modifier
+        modifier = modifier.padding(end = 114.dp)
     ) {
-        // Row 1: Compact Stats (Credits/Kills/Level) + Simplified Action Buttons (CFG, Hangar, Galaxy, Settings, Pause)
+        // Row 1: Unified Compact MENU Button + Stats (Credits/Kills/Level) + CFG + Galaxy + Pause
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (hasMenuAlert) Color(0xCC0A2E42) else SpaceHudPanel)
+                    .border(
+                        width = if (hasMenuAlert) 1.5.dp else 1.2.dp,
+                        color = if (hasMenuAlert) CyanLaser.copy(alpha = glowPulse) else CyanLaser.copy(alpha = 0.78f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .clickable(onClick = onOpenMenu)
+                    .padding(horizontal = 9.dp)
+                    .testTag("hud_menu_button")
+                    .semantics { contentDescription = strings.menuTitle }
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Menu,
+                    contentDescription = null,
+                    tint = CyanLaser,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = strings.hudMenu,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = TacticalWhite,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                if (hasMenuAlert) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (hud.mission.isReadyToClaim) EmeraldHull else AmberCredits)
+                    )
+                }
+            }
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1642,56 +1818,6 @@ fun TopTacticalHud(
                 )
             }
 
-            val hangarDesc = stringResource(R.string.cd_hangar_open)
-            val hasAlert = hud.mission.isReadyToClaim || hud.equipment.hasAnyReadyFusion
-            val hangarBg = if (hud.inSafeZone) Color(0xCC0A2E42) else SpaceHudPanel
-            val hangarBorder = when {
-                hud.mission.isReadyToClaim -> EmeraldHull.copy(alpha = glowPulse)
-                hud.inSafeZone -> CyanLaser.copy(alpha = glowPulse)
-                else -> SpaceHudBorder
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .height(34.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(hangarBg)
-                    .border(
-                        width = if (hud.inSafeZone || hasAlert) 1.4.dp else 1.dp,
-                        color = hangarBorder,
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    .clickable(onClick = onOpenHangar)
-                    .padding(horizontal = 8.dp)
-                    .testTag("hangar_button")
-                    .semantics { contentDescription = hangarDesc }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Build,
-                    contentDescription = null,
-                    tint = if (hud.inSafeZone) CyanLaser else AmberCredits,
-                    modifier = Modifier.size(13.dp)
-                )
-                Text(
-                    text = strings.hudHangar,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (hud.inSafeZone) CyanLaser else TacticalWhite,
-                    maxLines = 1,
-                    softWrap = false
-                )
-                if (hasAlert) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(if (hud.mission.isReadyToClaim) EmeraldHull else AmberCredits)
-                    )
-                }
-            }
-
             val galaxyDesc = stringResource(R.string.cd_open_galaxy_map)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1724,25 +1850,6 @@ fun TopTacticalHud(
                     color = CyanLaser,
                     maxLines = 1,
                     softWrap = false
-                )
-            }
-
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(SpaceHudPanel)
-                    .border(1.dp, SpaceHudBorder, RoundedCornerShape(8.dp))
-                    .clickable(onClick = onOpenSettings)
-                    .testTag("settings_button")
-                    .semantics { contentDescription = strings.hudSettings }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = null,
-                    tint = CyanLaser,
-                    modifier = Modifier.size(17.dp)
                 )
             }
 
@@ -1959,36 +2066,6 @@ fun TopTacticalHud(
                         text = radText,
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White
-                    )
-                }
-            }
-
-            if (hud.isAutopilotActive) {
-                val apCancelDesc = stringResource(R.string.cd_cancel_autopilot)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xCC062838))
-                        .border(1.2.dp, CyanLaser.copy(alpha = glowPulse), RoundedCornerShape(8.dp))
-                        .clickable(onClick = onCancelAutopilot)
-                        .padding(horizontal = 9.dp, vertical = 4.dp)
-                        .testTag("autopilot_badge")
-                        .semantics { contentDescription = apCancelDesc }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Navigation,
-                        contentDescription = null,
-                        tint = CyanLaser,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Text(
-                        text = strings.hudAutopilotBadge,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = CyanLaser,
-                        maxLines = 1,
-                        softWrap = false
                     )
                 }
             }
