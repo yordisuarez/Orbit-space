@@ -336,7 +336,9 @@ class ShipHullDefinition {
   final int weaponSlotCount;
   final int shieldSlotCount;
   final double hullRadius;
-
+  Color get accentColor =>
+      industrialType?.accentColor ?? const Color(0xFF38BDF8);
+  
   double effectiveHull([CraftQuality quality = CraftQuality.standard]) =>
       quality.applyBonus(baseHull);
 
@@ -1098,6 +1100,11 @@ class CraftedShipRecord {
   final int effectiveHull;
   final int effectiveShield;
   final int effectiveCargo;
+    int get id => instanceId;
+  int get effectiveMaxHull => effectiveHull;
+  int get effectiveMaxShield => effectiveShield;
+  int get effectiveCargoCapacity => effectiveCargo;
+  
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'instanceId': instanceId,
