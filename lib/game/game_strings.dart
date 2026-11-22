@@ -66,6 +66,8 @@ class GameStrings {
         'Atraca en una estación para cambiar de nave',
       );
   String get fleetBayTitle => t(lang, 'FLEET BAY', 'BAHÍA DE FLOTA');
+    String get hudMenuButton => t(lang, 'MENU', 'MENÚ');
+  String get dockButtonLabel => t(lang, 'DOCK', 'ATRACAR');
   
   
   static const List<GuideEntry> guideEntries = <GuideEntry>[
