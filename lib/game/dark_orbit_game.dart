@@ -260,7 +260,18 @@ class DarkOrbitGame extends FlameGame with TapCallbacks {
   }
 
   int get remainingCargoCapacity => max(0, currentCargoCapacity - totalCargoUsed);
+  String get activeHullDisplayName => activeShipDisplayName;
+  int get usedCargoUnits => totalCargoUsed;
+  int get activeCargoCapacity => currentCargoCapacity;
 
+  double get extractionDuration =>
+      (activeMiningNode != null || activeSalvageWreck != null) ? 1.0 : 0.0;
+
+  double get extractionElapsed =>
+      activeMiningNode?.harvestProgress ??
+      activeSalvageWreck?.salvageProgress ??
+      0.0;
+  
   int skillLevelOf(SkillType skill) =>
       (pilotSkills[skill] ?? const SkillProgress()).level;
 
