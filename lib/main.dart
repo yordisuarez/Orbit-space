@@ -552,15 +552,16 @@ class _GameplayShellState extends State<_GameplayShell> {
                       right: 0.0,
                       child: Center(
                         child: ElevatedButton.icon(
-                          onPressed: () => game.openStation(dockStation),
+                          onPressed: () => game.openStation(initialTab: dockStation.kind)
+                          ,
                           icon: Icon(
-                            dockStation.kind == StationKind.blackMarket
+                            dockStation.kind == StationKind.localMarket
                                 ? Icons.storefront
                                 : Icons.hub,
                             size: 16.0,
                           ),
                           label: Text(
-                            '${s.dockButtonLabel} • ${dockStation.title.toUpperCase()}',
+                            '${s.dockButtonLabel} • ${dockStation.name.toUpperCase()}',
                             maxLines: 1,
                             softWrap: false,
                           ),
